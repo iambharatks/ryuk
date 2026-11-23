@@ -1,0 +1,16 @@
+name = "ryuk"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+[vars]
+OWNER_CHAT_ID = "1104395846"
+NOTION_DB_ID = "421c0614e01681bdb52fd9f6ae643e13"
+GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+
+# 22:00 IST daily summary
+[triggers]
+crons = ["30 16 * * *"]
+
+# Secrets (set with `npx wrangler secret put NAME`, never commit them):
+# TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, NOTION_TOKEN

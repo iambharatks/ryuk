@@ -73,3 +73,65 @@ possible-duplicate transactions, "0" = off)
 ### Adding your bank's formats
 Add real (redacted) SMS with expected fields to `tests/sms.test.mjs`, run `npm run test:sms`, fix `src/sms.ts`.
 Ignored SMS and their reasons are kept in `sms_inbox`, so missed formats are easy to find.
+
+## Apple Health: daily totals → `health_daily`
+
+`POST /ingest/health` with header `X-Ryuk-Key: <HEALTH_KEY>` and a JSON body of daily totals, e.g.
+`{"date":"2026-11-25","steps":8432,"active_kcal":512,"exercise_min":41,"distance_km":6.2,"resting_hr":58,"hrv_ms":46,"sleep_min":402,"weight_kg":72.4}`.
+All fields optional; strings like `"8,432"` or `"58 BPM"` are accepted; out-of-range values are dropped and listed in `dropped`.
+Same date again = update (only the fields you send change). Plain code, never Gemini or Telegram.
+Fields: steps, distance_km, flights, active_kcal, resting_kcal, exercise_min, stand_hours, avg_hr, resting_hr, walking_hr,
+hrv_ms, vo2max, respiratory_rate, spo2_pct, sleep_min, in_bed_min, weight_kg, body_fat_pct, mindful_min.
+Setup: `npx wrangler secret put HEALTH_KEY`, apply `schema.sql`, deploy. Shortcut steps are in the setup doc.
+
+## Text logging Shortcut (alternative to Telegram)
+
+`POST /ingest/log` with header `X-Ryuk-Key: <LOG_KEY>`, body `{"text":"bench 3x10 60"}` → same parsing as Telegram,
+returns `{"status":"logged","reply":"✓ strength: ..."}`. Setup: `npx wrangler secret put LOG_KEY`, deploy.
+
+## Batch notes (a whole workout at once)
+
+Paste a multi-line note into Telegram (or send it through the Log Shortcut). Each line is logged at its own time:
+```
+Push day
+18:02 bench 60x10
+18:05 bench 65x8
+6:40 pm squat 80x5
+- lat pulldown 3x12 50      (no time: takes the previous line's time)
+```
+Optional date header (`24/11`, `2026-11-24`, `kal`, `yesterday`). One Gemini call per paste. Re-sending the same note
+only logs new lines (`batch_lines` dedupe), so you can send mid-workout and again at the end. Rest between sets of the
+same exercise is filled from the timestamps. `/undo` removes the whole last batch. Tests: `npm run test:batch`.
+
+## Gym mode (Telegram, times captured automatically)
+
+`/gym` (optionally `/gym push day`) → send each set as its own message (`bench 60x10`). Each message is stamped with its
+send time and gets a ✍ reaction instead of a reply. `/status` lists the session, `/undo` drops the last set, `/cancel`
+discards, `/done` parses everything in one Gemini call and replies with every set plus a session summary.
+A session idle for over 3 hours is closed automatically. Commands for BotFather `/setcommands`:
+```
+gym - start a gym session (times recorded automatically)
+done - finish the session and log it
+status - show sets in the current session
+undo - remove the last entry
+cancel - discard the current session
+today - what was logged today
+retry - re-parse messages that failed
+```
+
+## Dashboard Notepad
+
+Dashboard → **Notepad**. Type one set per line; each line is stamped with the time you start typing it (tap a time to
+correct it). Lines stay in the browser until you press **Send** (or ⌘/Ctrl+Enter), so a dropped connection loses nothing,
+and re-sending is safe. On iPhone, Share → Add to Home Screen. Set the Access session to a week or more so it doesn't ask
+you to sign in mid-workout.
+
+## Daily Page and Shelf (v14)
+
+- **Page**: one page per day. Type a line, Enter: it appears in pencil, stamped with the time you began writing it.
+  "Write in ink" (or Ctrl/⌘+Enter, or the "Ink as I write" toggle) saves it. Start a line with `[]` (or tap the feather) for
+  an intention; ticking it logs it at that moment. Tap any line to fix its words or time, or erase it. ← → or swipe turns pages.
+- **Shelf**: books and PDFs with a bookmark page, videos/audio with a timestamp (uploaded ones save their position while
+  playing), images and links. Moving forward is also logged as reading/watching time.
+- Uploads need R2: enable R2 in the Cloudflare dashboard, then `npx wrangler r2 bucket create ryuk-files` before `npm run deploy:dash`.
+- Handoff prompts for Claude Code: `docs/PROMPT-1-handoff.md`, `docs/PROMPT-2-parser-eval.md`, `docs/PROMPT-3-security-scale.md`.

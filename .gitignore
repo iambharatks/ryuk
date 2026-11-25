@@ -10,4 +10,3 @@ dash/ui/dist-demo/
 backup-*.sql
 *.age
 .claude/settings.local.json
-.local/

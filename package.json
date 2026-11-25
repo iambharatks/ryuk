@@ -9,7 +9,10 @@
     "deploy:bot": "wrangler deploy",
     "deploy:dash": "npm run build:ui && wrangler deploy --config dash/wrangler.toml",
     "build:demo": "cd dash/ui && VITE_DEMO=1 npx vite build --outDir dist-demo",
-    "test:sms": "esbuild src/sms.ts --bundle --format=esm --platform=neutral --outfile=.wrangler/sms-test.mjs --log-level=warning && node tests/sms.test.mjs"
+    "test:sms": "esbuild src/sms.ts --bundle --format=esm --platform=neutral --outfile=.wrangler/sms-test.mjs --log-level=warning && node tests/sms.test.mjs",
+    "test:batch": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild src/batch.ts --format=esm --outfile=.wrangler/batch-test.mjs --log-level=warning && node --no-warnings tests/batch.test.mjs",
+    "test": "npm run test:sms && npm run test:batch && npm run test:dash",
+    "test:dash": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild dash/src/index.ts --bundle --format=esm --platform=neutral --loader:.html=text --outfile=.wrangler/dash-test.mjs --log-level=warning && node --no-warnings tests/dash.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261123.1",

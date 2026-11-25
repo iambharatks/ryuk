@@ -20,6 +20,7 @@ export default {
         frak: ['"Jacquard 24"', '"Grenze Gotisch"', "serif"],
         gothic: ['"Grenze Gotisch"', "serif"],
         tech: ['"Share Tech Mono"', '"JetBrains Mono"', "monospace"],
+        hand: ['"Nothing You Could Do"', '"Segoe Print"', "cursive"],
       },
       borderRadius: { bento: "20px" },
       keyframes: { pulseDot: { "0%,100%": { opacity: "1" }, "50%": { opacity: "0.35" } } },

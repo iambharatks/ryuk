@@ -7,21 +7,28 @@ Single user. Free tier only. Privacy is the top constraint.
 ## Architecture
 ```
 iPhone Telegram ──webhook──▶ ryuk (Worker, src/index.ts) ──Gemini Flash-Lite──▶ JSON events ──▶ D1 "ryuk"
-iPhone bank SMS ──Shortcut POST /ingest/sms (X-Ryuk-Key)──▶ src/ingest.ts ──regex parser src/sms.ts──▶ D1
+iPhone bank SMS ──Shortcut POST /ingest/sms    (X-Ryuk-Key = INGEST_KEY)──▶ src/ingest.ts ──regex parser src/sms.ts──▶ D1
+iPhone Health   ──Shortcut POST /ingest/health (X-Ryuk-Key = HEALTH_KEY)──▶ src/health.ts ──plain code──▶ D1 health_daily
+iPhone text     ──Shortcut POST /ingest/log    (X-Ryuk-Key = LOG_KEY)────▶ same Gemini path as Telegram
 Browser ──Cloudflare Access (Google login, one email)──▶ ryuk-dash (dash/src/index.ts) ──▶ D1
                                                          └─ Service Binding RPC BOT.capture() → ryuk
 Cron 30 16 * * * (22:00 IST) ──▶ daily summary to Telegram
 ```
 - Bot worker: `src/index.ts` (Telegram, Gemini, /today /undo /retry, `RyukRPC` entrypoint, cron).
+- Batch notes: `src/batch.ts` (pure line/time parsing) + `logBatch()` in `src/index.ts`: a multi-line paste becomes one message per line at its own time, ONE Gemini call, dedupe via `batch_lines`, rest_sec from gaps, `/undo` removes the whole batch.
+- Gym mode (Telegram): `/gym [label]` opens a session; each message is buffered in `live_lines` with Telegram's send time and gets a ✍ reaction (no reply); `/status`, `/undo` (last set), `/cancel`, `/done` → `logLines()` in one Gemini call. Sessions idle > 3 h auto-close (next message or cron).
+- Dashboard Page (`DeathPage.tsx`): lines stamped when you start typing, pencil drafts in localStorage, ink = POST `/api/notepad` → `BOT.captureLines()`; edits via `/api/entry` → `BOT.relog()`; tasks via `/api/tasks` (`BOT.captureOne()` when ticked).
+- Shelf (`Shelf.tsx`, `dash/src/extra.ts`): library items, progress → library_events + time_log; uploads to R2 `FILES`, served with Range by `/api/file/<key>`.
+- `dash/ui/src/store.ts`: API store and in-memory demo store with the same interface.
 - Finance: `src/sms.ts` (pure, deterministic parser) + `src/ingest.ts` (auth, dedupe, flags, rules).
 - Dashboard worker: `dash/src/index.ts` (Access JWT verify, `/api/data`, `/api/row` PATCH/DELETE, `/api/pins`, `/api/capture`). Serves one inlined HTML file `dash/src/page.html`.
 - UI: `dash/ui/` React 18 + Vite + Tailwind 3 + lucide-react, built to a single file (vite-plugin-singlefile). Death Note–inspired original theme ("Obsidian Archive").
-- Schema: `schema.sql` (idempotent `CREATE ... IF NOT EXISTS`). Tables: messages, strength, cardio (pace in sec/km, cadence, HR, splits), meals (kcal + macro estimates), water, sleep, time_log, checkins, body, notes, pins, sms_inbox, transactions, merchant_rules. Both workers share D1 database `ryuk`.
+- Schema: `schema.sql` (idempotent `CREATE ... IF NOT EXISTS`). Tables: messages, strength, cardio (pace in sec/km, cadence, HR, splits), meals (kcal + macro estimates), water, sleep, time_log, checkins, body, notes, pins, sms_inbox, transactions, merchant_rules, health_daily, batch_lines, live_session, live_lines (one row per IST day, upserted). Both workers share D1 database `ryuk`.
 
 ## Hard rules (do not break)
-1. **Financial data never goes to Gemini, Telegram, logs, or any third party.** Finance alerts to Telegram carry no amount/merchant.
+1. **Financial and Apple Health data never go to Gemini, Telegram, logs, or any third party.** Finance alerts to Telegram carry no amount/merchant. Each Shortcut source has its own key.
 2. Store the minimum: never full account/card numbers, OTPs, PINs, passwords. Keep last 4 only; `redact()` before storing SMS text.
-3. **Secrets only via `npx wrangler secret put`.** Never write keys/tokens into `wrangler.toml`, code, tests, or commits (a leaked Gemini key already hit GitHub push protection once). Secrets: TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, INGEST_KEY.
+3. **Secrets only via `npx wrangler secret put`.** Never write keys/tokens into `wrangler.toml`, code, tests, or commits (a leaked Gemini key already hit GitHub push protection once). Secrets: TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, INGEST_KEY, HEALTH_KEY, LOG_KEY.
 4. Every new endpoint must be authenticated (Telegram secret_token + OWNER_CHAT_ID, X-Ryuk-Key constant-time compare, or Access JWT). Never weaken CSP or Access checks.
 5. Never run remote destructive SQL (`DROP`, `DELETE`, `--remote` schema changes) or deploy without asking the user first.
 6. No copyrighted characters/art/lettering in the UI. Original "Watcher" figure, Jacquard 24 font only.
@@ -40,7 +47,10 @@ Cron 30 16 * * * (22:00 IST) ──▶ daily summary to Telegram
 ```bash
 npm install
 npm run typecheck                 # tsc --noEmit
-npm run test:sms                  # parser tests (tests/sms.test.mjs)
+npm run test:sms                  # SMS parser tests (tests/sms.test.mjs)
+npm run test:batch                # batch notes end-to-end on a fake D1 + stubbed Gemini (tests/batch.test.mjs)
+npm run test:dash                 # dashboard API end-to-end (JWT, page, tasks, shelf, uploads)
+npm test                          # all
 npx wrangler dev                  # local bot (use .dev.vars for local secrets, gitignored)
 npx wrangler d1 execute ryuk --local  --file=schema.sql
 npx wrangler d1 execute ryuk --remote --file=schema.sql   # ASK FIRST

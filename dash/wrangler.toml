@@ -25,3 +25,9 @@ database_id = "53064e2a-fc9f-4650-a328-7a3733bdb4dd"
 binding = "BOT"
 service = "ryuk"
 entrypoint = "RyukRPC"
+
+# R2 bucket for shelf uploads — enable R2 in Cloudflare dashboard first, then:
+#   npx wrangler r2 bucket create ryuk-files
+# [[r2_buckets]]
+# binding = "FILES"
+# bucket_name = "ryuk-files"

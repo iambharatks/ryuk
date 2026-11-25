@@ -227,3 +227,103 @@ CREATE TABLE IF NOT EXISTS merchant_rules (
   ignore        INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL
 );
+
+-- ================= Apple Health (daily totals from an iPhone Shortcut) =================
+-- One row per IST day. Re-sending the same day updates it (non-null values win). Never sent to Gemini or Telegram.
+CREATE TABLE IF NOT EXISTS health_daily (
+  date              TEXT PRIMARY KEY,        -- YYYY-MM-DD (IST)
+  steps             INTEGER,
+  distance_km       REAL,                    -- walking + running
+  flights           INTEGER,
+  active_kcal       REAL,
+  resting_kcal      REAL,
+  exercise_min      REAL,
+  stand_hours       INTEGER,
+  avg_hr            REAL,
+  resting_hr        REAL,
+  walking_hr        REAL,
+  hrv_ms            REAL,
+  vo2max            REAL,
+  respiratory_rate  REAL,
+  spo2_pct          REAL,
+  sleep_min         REAL,                    -- asleep time for the night that ended this day
+  in_bed_min        REAL,
+  weight_kg         REAL,
+  body_fat_pct      REAL,
+  mindful_min       REAL,
+  source            TEXT,                    -- e.g. "iphone-shortcut"
+  updated_at        TEXT NOT NULL
+);
+
+-- ================= Batch notes =================
+-- Each line of a pasted note (e.g. a whole workout) becomes its own message at its own time.
+-- line_key = minute + normalised text, so re-sending the same note never logs a line twice; batch_id groups a paste for /undo.
+CREATE TABLE IF NOT EXISTS batch_lines (
+  line_key    TEXT PRIMARY KEY,
+  batch_id    TEXT NOT NULL,
+  message_id  INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_batch_lines_batch ON batch_lines(batch_id);
+CREATE INDEX IF NOT EXISTS idx_batch_lines_msg   ON batch_lines(message_id);
+
+-- ================= Gym mode (Telegram /gym ... /done) =================
+-- While a session is open, each message is buffered here with its Telegram send time; /done parses them in one batch.
+CREATE TABLE IF NOT EXISTS live_session (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  started_at  TEXT NOT NULL,
+  label       TEXT
+);
+CREATE TABLE IF NOT EXISTS live_lines (
+  id             INTEGER PRIMARY KEY,
+  at             TEXT NOT NULL,
+  text           TEXT NOT NULL,
+  tg_message_id  INTEGER
+);
+
+-- ================= The daily page: tasks =================
+-- Tasks written on a day's page. Ticking one done logs it (a message at done_at) and keeps its message_id.
+CREATE TABLE IF NOT EXISTS tasks (
+  id          INTEGER PRIMARY KEY,
+  day         TEXT NOT NULL,              -- YYYY-MM-DD (IST) the task is written on
+  text        TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  done_at     TEXT,
+  message_id  INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  position    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_day ON tasks(day);
+
+-- ================= The shelf: books, PDFs, videos, images, links =================
+CREATE TABLE IF NOT EXISTS library (
+  id          INTEGER PRIMARY KEY,
+  kind        TEXT NOT NULL,              -- book | pdf | video | audio | image | link
+  title       TEXT NOT NULL,
+  creator     TEXT,                       -- author / channel / site
+  url         TEXT,                       -- external link (https)
+  file_key    TEXT,                       -- uploaded file in R2 (served at /api/file/<key>)
+  mime        TEXT,
+  total       REAL,                       -- pages (book, pdf) or seconds (video, audio)
+  progress    REAL,                       -- current page or current second
+  status      TEXT NOT NULL DEFAULT 'active',  -- active | paused | done | wishlist
+  note        TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+-- Every progress change: "page 120 -> 150", "video 12:30 -> 31:05". Also written to time_log as reading / watching.
+CREATE TABLE IF NOT EXISTS library_events (
+  id          INTEGER PRIMARY KEY,
+  item_id     INTEGER NOT NULL REFERENCES library(id) ON DELETE CASCADE,
+  at          TEXT NOT NULL,
+  from_value  REAL,
+  to_value    REAL NOT NULL,
+  note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_library_events_item ON library_events(item_id);
+
+-- R2 operation counters (stay within free tier: 1M Class A, 10M Class B per month)
+CREATE TABLE IF NOT EXISTS r2_ops (
+  month   TEXT PRIMARY KEY,   -- "2026-11"
+  class_a INTEGER DEFAULT 0,
+  class_b INTEGER DEFAULT 0
+);

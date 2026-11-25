@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import { Activity, BedDouble, BookOpen, Brain, Check, Flame, ImagePlus, Plus, Sparkles, Target, X, Zap } from "lucide-react";
+import { Activity, BedDouble, BookOpen, Brain, Check, Flame, ImagePlus, Plus, Sparkles, Target, Trash2, X, Zap } from "lucide-react";
 import { Data, Ev, MoodItem, allEvents, dayKey, habits, heatmap, hhmm, moodboard, observations, prettyDay, shortDay, todayKey, vitals } from "../data";
 import { ACCENT, Card, CardHead, LiveDot, Ring, Sparkline } from "./ui";
 import { Watcher } from "./Lore";
 
-export function Overview({ data, onAddPin, demo }: { data: Data; onAddPin: (p: { kind: string; title: string; note?: string; image_url?: string }) => Promise<void>; demo: boolean }) {
+export function Overview({ data, onAddPin, onDeletePin, demo }: { data: Data; onAddPin: (p: { kind: string; title: string; note?: string; image_url?: string }) => Promise<void>; onDeletePin: (id: number) => Promise<void>; demo: boolean }) {
   return (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
       <ChronicleCard data={data} />
       <TelemetryCard data={data} />
-      <MoodboardCard data={data} onAddPin={onAddPin} demo={demo} />
+      <MoodboardCard data={data} onAddPin={onAddPin} onDeletePin={onDeletePin} demo={demo} />
       <HabitCard data={data} />
       <ObservationsCard data={data} />
     </div>
@@ -98,7 +98,7 @@ function TelemetryCard({ data }: { data: Data }) {
 const TONES = [["#1E1A1A", "#3A2622"], ["#16181D", "#262B35"], ["#1A1A17", "#2F2D25"], ["#181519", "#2C2430"], ["#141A18", "#22302B"]];
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
-function MoodTile({ item }: { item: MoodItem }) {
+function MoodTile({ item, onDelete }: { item: MoodItem; onDelete?: (id: number) => void }) {
   if (item.type === "book") {
     const [a, b] = TONES[hash(item.title) % TONES.length];
     const tall = hash(item.title) % 2 === 0;
@@ -119,9 +119,16 @@ function MoodTile({ item }: { item: MoodItem }) {
     );
   }
   const p = item.pin;
+  const delBtn = onDelete && (
+    <button aria-label="Remove pin" onClick={() => confirm("Remove this pin?") && onDelete(p.id)}
+      className="absolute right-2 top-2 rounded-lg bg-canvas/80 p-1.5 text-slate-dim opacity-0 transition hover:bg-apple/10 hover:text-apple group-hover:opacity-100">
+      <Trash2 size={13} />
+    </button>
+  );
   if (p.image_url) {
     return (
-      <figure className="group mb-3 break-inside-avoid overflow-hidden rounded-2xl border border-hairline bg-raised">
+      <figure className="group relative mb-3 break-inside-avoid overflow-hidden rounded-2xl border border-hairline bg-raised">
+        {delBtn}
         <div className="overflow-hidden"><img src={p.image_url} alt={p.title} loading="lazy" referrerPolicy="no-referrer"
           className="w-full object-cover grayscale-[15%] transition-transform duration-700 group-hover:scale-[1.06]" /></div>
         <figcaption className="px-3 py-2.5"><span className="eyebrow !text-[9px]">{p.kind}</span><p className="mt-1 text-[13px] text-ink">{p.title}</p></figcaption>
@@ -129,7 +136,8 @@ function MoodTile({ item }: { item: MoodItem }) {
     );
   }
   return (
-    <figure className={`mb-3 break-inside-avoid rounded-2xl border p-4 ${p.kind === "goal" ? "border-apple/30 bg-apple/[0.06]" : "border-hairline bg-raised"}`}>
+    <figure className={`group relative mb-3 break-inside-avoid rounded-2xl border p-4 ${p.kind === "goal" ? "border-apple/30 bg-apple/[0.06]" : "border-hairline bg-raised"}`}>
+      {delBtn}
       <span className={`eyebrow !text-[9px] inline-flex items-center gap-1 ${p.kind === "goal" ? "!text-apple" : ""}`}>{p.kind === "goal" && <Target size={10} />}{p.kind}</span>
       <p className={`mt-2 font-serif leading-[1.1] text-ink ${p.kind === "inspiration" ? "text-[22px] italic" : "text-[19px]"}`}>{p.title}</p>
       {p.note && <p className="mt-2 text-[12px] leading-snug text-slate">{p.note}</p>}
@@ -137,7 +145,7 @@ function MoodTile({ item }: { item: MoodItem }) {
   );
 }
 
-function MoodboardCard({ data, onAddPin, demo }: { data: Data; onAddPin: (p: any) => Promise<void>; demo: boolean }) {
+function MoodboardCard({ data, onAddPin, onDeletePin, demo }: { data: Data; onAddPin: (p: any) => Promise<void>; onDeletePin: (id: number) => Promise<void>; demo: boolean }) {
   const items = useMemo(() => moodboard(data), [data]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ kind: "goal", title: "", note: "", image_url: "" });
@@ -170,7 +178,7 @@ function MoodboardCard({ data, onAddPin, demo }: { data: Data; onAddPin: (p: any
         </div>
       )}
       <div className="mt-5 -mr-3 flex-1 overflow-y-auto pr-3">
-        {items.length ? <div className="columns-2 gap-3">{items.map((it, i) => <MoodTile key={i} item={it} />)}</div>
+        {items.length ? <div className="columns-2 gap-3">{items.map((it, i) => <MoodTile key={i} item={it} onDelete={it.type === "pin" ? onDeletePin : undefined} />)}</div>
           : <p className="py-10 text-center text-sm text-slate">No omens yet. Pin a goal or an image, or write a book (“read DDIA 20 pages”) and it appears here.</p>}
       </div>
     </Card>

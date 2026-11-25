@@ -21,8 +21,11 @@ export type Txn = { id: number; txn_at: string; amount: number; direction: strin
   account_last4: string | null; card_last4: string | null; txn_ref: string | null; counterparty: string | null; counterparty_key: string | null;
   vpa: string | null; purpose: string | null; category: string | null; flags: string | null; confidence: number; status: string; note: string | null };
 export type Rule = { id: number; match_key: string; display_name: string | null; category: string | null; kind: string | null; ignore: number; created_at: string };
+export type HealthDay = { id: number; date: string; steps: N; distance_km: N; flights: N; active_kcal: N; resting_kcal: N;
+  exercise_min: N; stand_hours: N; avg_hr: N; resting_hr: N; walking_hr: N; hrv_ms: N; vo2max: N; respiratory_rate: N;
+  spo2_pct: N; sleep_min: N; in_bed_min: N; weight_kg: N; body_fat_pct: N; mindful_min: N; source: S; updated_at: string };
 export type Data = {
-  transactions?: Txn[]; merchant_rules?: Rule[];
+  transactions?: Txn[]; merchant_rules?: Rule[]; health_daily?: HealthDay[];
   strength: Strength[]; cardio: Cardio[]; meals: Meal[]; water: Water[]; sleep: Sleep[];
   time_log: TimeLog[]; checkins: Checkin[]; body: Body[]; notes: Note[]; messages: Message[]; pins: Pin[];
   daily_counts: { d: string; n: number }[];
@@ -68,6 +71,12 @@ export async function fetchData(days: number): Promise<Data> {
 }
 export async function apiCapture(text: string): Promise<string> {
   const res = await fetch("/api/capture", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body.reply;
+}
+export async function apiNotepad(lines: { text: string; at: string }[]): Promise<string> {
+  const res = await fetch("/api/notepad", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lines }) });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
   return body.reply;

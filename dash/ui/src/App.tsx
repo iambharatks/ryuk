@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Command, PenLine, RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
 import { Data, apiAddPin, apiCapture, apiRow, demoData, fetchData } from "./data";
+import { DeathPage } from "./components/DeathPage";
+import { Shelf } from "./components/Shelf";
+import { apiStore, demoStore, type Store } from "./store";
 import { Emblem, LiveDot } from "./components/ui";
 import { Overview } from "./components/Overview";
 import { CaptureModal, ChronicleView, TelemetryView, VaultView } from "./components/Views";
@@ -9,15 +12,15 @@ import { OWNER } from "./config";
 import { AppleDrop, Ash, NotebookCover, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } from "./components/Lore";
 import { lastDays } from "./data";
 
-const VIEWS = ["Gaze", "Notebook", "Ledger", "Eyes"] as const;
-const VIEW_LABEL: Record<string, string> = { Gaze: "Gaze", Notebook: "The Notebook", Ledger: "Ledger", Eyes: "Shinigami Eyes" };
+const VIEWS = ["Gaze", "Page", "Shelf", "Notebook", "Ledger", "Eyes"] as const;
+const VIEW_LABEL: Record<string, string> = { Gaze: "Gaze", Page: "Page", Shelf: "Shelf", Notebook: "Notebook", Ledger: "Ledger", Eyes: "Eyes" };
 type View = (typeof VIEWS)[number];
 
 // Demo data only on ?demo or when opened from a local file / localhost (never silently in production).
 const DEMO = import.meta.env.VITE_DEMO === "1" || /[?&]demo\b/.test(location.search) || ["localhost", "127.0.0.1", ""].includes(location.hostname);
 
 export default function App() {
-  const [view, setView] = useState<View>(() => (VIEWS.find((v) => location.hash === "#" + v.toLowerCase()) ?? "Gaze"));
+  const [view, setView] = useState<View>(() => (VIEWS.find((v) => location.hash === "#" + v.toLowerCase()) ?? (location.hash === "#notepad" ? "Page" : "Gaze")));
   const [days, setDays] = useState(90);
   const [data, setData] = useState<Data | null>(null);
   const [state, setState] = useState<"loading" | "synced" | "error">("loading");
@@ -27,6 +30,9 @@ export default function App() {
   const [apple, setApple] = useState(0);
   const [eyesOpen, setEyesOpen] = useState(false);
 
+  const [demoS] = useState<Store | null>(() => (DEMO ? demoStore() : null));
+  const uploads = !!(data as any)?.uploads;
+  const store = useMemo(() => demoS ?? apiStore(uploads), [demoS, uploads]);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2200); };
 
   const load = useCallback(async () => {
@@ -134,7 +140,7 @@ export default function App() {
           <div>
             <p className="eyebrow">{greet}, {OWNER.name} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" })}</p>
             <h1 key={view} className="ink-write mt-2 font-serif text-[40px] leading-[1.02] text-ink md:text-[56px]">
-              {view === "Gaze" ? <>Everything is <em className="text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : <>Shinigami <em className="text-slate">eyes</em></>}
+              {view === "Gaze" ? <>Everything is <em className="text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : view === "Page" ? <>Write it <em className="text-slate">as it happens</em></> : view === "Shelf" ? <>The <em className="text-slate">shelf</em></> : <>Shinigami <em className="text-slate">eyes</em></>}
             </h1>
           </div>
           {view === "Gaze" && (
@@ -144,16 +150,18 @@ export default function App() {
             </div>
           )}
         </div>
-        {state === "error" && !data && (
+        {state === "error" && !data && view !== "Page" && view !== "Shelf" && (
           <div className="card p-10 text-center">
             <Watcher size={80} className="mx-auto mb-4" /><p className="font-serif text-2xl text-ink">The notebook could not be reached.</p>
             <p className="mt-2 font-mono text-xs text-slate">{err}</p>
             <button className="btn mt-6" onClick={load}><RefreshCw size={14} />Try again</button>
           </div>
         )}
-        {!data && state === "loading" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
+        {!data && state === "loading" && view !== "Page" && view !== "Shelf" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
         <div key={view} className="page-turn">
-        {data && view === "Gaze" && <Overview data={data} onAddPin={onAddPin} demo={DEMO} />}
+        {data && view === "Gaze" && <Overview data={data} onAddPin={onAddPin} onDeletePin={(id) => onDelete("pins", id)} demo={DEMO} />}
+        {view === "Page" && <DeathPage store={store} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
+        {view === "Shelf" && <Shelf store={store} onChanged={() => { if (!DEMO) load(); }} />}
         {data && view === "Notebook" && <ChronicleView data={data} />}
         {data && view === "Ledger" && <VaultView data={data} onEdit={onEdit} onDelete={onDelete} />}
         {data && view === "Eyes" && <TelemetryView data={data} days={days} setDays={setDays} onOpenEyes={() => setEyesOpen(true)} />}

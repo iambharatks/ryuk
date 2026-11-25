@@ -4,7 +4,9 @@
  * Commands: /today  /undo  /retry
  */
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { handleIngest } from "./ingest";
+import { handleIngest, json, keyOk } from "./ingest";
+import { handleHealth } from "./health";
+import { type BatchLine, hhmm, isBatch, lineKey, parseBatch } from "./batch";
 
 export interface Env {
   DB: D1Database;                  // D1 binding (wrangler.toml)
@@ -14,7 +16,9 @@ export interface Env {
   OWNER_CHAT_ID: string;           // var
   GEMINI_MODEL: string;            // var, primary model
   GEMINI_FALLBACK_MODEL?: string;  // var, used on 429 / 404 / 5xx / timeout
-  INGEST_KEY?: string;             // secret, for /ingest/* (iPhone Shortcuts)
+  INGEST_KEY?: string;             // secret, for /ingest/sms (bank SMS Shortcut)
+  HEALTH_KEY?: string;             // secret, for /ingest/health (Apple Health Shortcut)
+  LOG_KEY?: string;                // secret, for /ingest/log (text logging Shortcut)
   LARGE_TXN_INR?: string;          // var, threshold for the "large" flag
   FINANCE_ALERTS?: string;         // var, "1" = detail-free Telegram ping for flagged transactions
 }
@@ -26,7 +30,8 @@ type Ev = {
   type: EventType;
   summary: string;
   day_offset?: number | null;
-  at_time?: string | null;     // "HH:MM" IST; overrides message send time when stated
+  at_time?: string | null;
+  line?: number | null;          // batch mode: which numbered line the event came from
   detail?: string | null;
   // strength
   exercise?: string | null; muscle_group?: string | null; equipment?: string | null;
@@ -74,6 +79,7 @@ const SCHEMA = {
           summary: { type: "STRING" },
           day_offset: int,
           at_time: str(),
+          line: int,
           detail: str(),
           exercise: str(), muscle_group: str(["chest", "back", "shoulders", "legs", "arms", "core", "full_body"]),
           equipment: str(["barbell", "dumbbell", "machine", "cable", "bodyweight", "kettlebell", "band", "other"]),
@@ -152,26 +158,18 @@ GENERAL RULES
 1. One event per distinct activity; a message can hold many.
 2. Durations always in minutes ("2 ghante" = 120, "dedh ghanta" = 90, "28:10" = 28.17).
 3. Never invent numbers except the meal estimates (calories_est and the *_g_est fields). Unknown -> null.
-   The app auto-derives these — do NOT fill them yourself: avg_pace_sec_km (derived from distance+duration if missing),
-   avg_speed_kmh (cycling only, same), volume_kg (sets × reps × weight). Fill everything else the user states.
-   Converting stated formats is EXPECTED, not "computing": "55:20" -> duration_min 55.33; "5:32/km" -> avg_pace_sec_km 332;
-   "2h30m" -> duration_min 150. If the user states a pace explicitly ("avg 5:32"), fill avg_pace_sec_km 332.
+   The app auto-derives avg_pace_sec_km, avg_speed_kmh, and volume_kg only — do NOT fill those unless the user stated them.
+   Converting formats IS expected: "55:20" time → 55.33 min, "5:32/km" pace → 332 sec/km, "2 ghante" → 120 min.
 4. day_offset: 0 normally, -1 for yesterday ("kal", "last night", "yesterday").
 5. detail: short English extra info worth keeping; null if none.
 6. summary: 3-8 word English title, e.g. "Bench press 3x10 at 60kg", "Run 5 km in 30 min".
-7. CRITICAL — every number you put in the summary MUST also be in its structured field. "Bench press 3x10 at 60kg"
-   -> sets=3, reps=10, weight_kg=60. "10 km run in 55 min 20 sec" -> distance_km=10, duration_min=55.33.
-   Never leave a field null when you already extracted the value for the summary.
-8. VOICE DICTATION — input may come from voice transcription. Common garbling: "5520" = "55:20" = 55.33 min;
-   "532" = "5:32" = 332 sec/km pace; "contains"/"cadence" both mean cadence_spm; "or five 5158"/"hr 158" = avg_hr 158.
-9. at_time: fill with "HH:MM" 24h IST when the user states or implies WHEN the activity happened (not message time).
-   Stated: "ran at 7am" -> "07:00"; "9:30 baje" -> "09:30"; "evening run" -> "18:00".
-   Hindi/Hinglish: "subah" -> "07:00", "dopahar" -> "13:00", "shaam" -> "18:00", "raat" -> "21:00".
-   "just did it" / "right now" / no time mention -> null (app uses message time).
-10. UNSTRUCTURED INPUT — be flexible; extract what you can, null the rest. "about / roughly / ~" -> use that number.
-    Ranges like "3-4 sets" -> use the higher value (4). Missing units -> infer from context ("bench 60 4x10" = 60 kg).
-    "chest day" alone -> one strength event per exercise mentioned. If only the muscle group is stated with no exercise,
-    use muscle_group and leave exercise null.
+7. Every number present in the summary MUST also appear in its matching structured field.
+8. Voice dictation often garbles numbers: "five k" = 5 km, "one seventy two" = 172 bpm, "five five eight" = 558 sec pace. Apply common sense.
+9. at_time: if the user mentions WHEN an activity happened (not duration), fill at_time as "HH:MM" in IST 24h.
+   "subah" / "morning" → "07:00", "dopahar" → "12:00", "shaam" / "evening" → "18:00", "raat" / "night" → "21:00".
+   If not mentioned leave null — the app uses the message send time.
+10. Unstructured input: "around 5k", "roughly 30 min", "maybe 400 cal" → use the number as-is (5, 30, 400).
+    Missing units: "ran 5 in 30" likely → 5 km, 30 min. "bench 60" → 60 kg. Use fitness context.
 
 EXAMPLES
 "bench 3x10 60, incline db 3x12 20, 15 pushups"
@@ -197,11 +195,12 @@ EXAMPLES
    time deep_work work 60 min title "GDX validation bug"
 "idea: mcp server over my ryuk log"
 -> note idea "MCP server over my ryuk log"
-"subah 7 baje ran 10k 55:20 avg 5:32 cadence 172 hr 158 max 176"
--> cardio Run outdoor 55.33 min 10 km, pace 332, cadence 172, avg_hr 158, max_hr 176, at_time "07:00"
-"chest day, did roughly 4 sets bench around 60kg, 3-4 sets incline 50, khatam 9pm ke baad"
--> strength Bench press sets=4 reps=null weight_kg=60 at_time "21:00";
-   strength Incline dumbbell press sets=4 reps=null weight_kg=50 at_time "21:00"`;
+"subah 7 baje 5km run kiya 30 min"
+-> cardio Run outdoor 30 min 5 km, at_time "07:00"
+"shaam gym gaya bench 3x10 60"
+-> strength Bench press 3x10 60kg, at_time "18:00"
+"around 5k ran maybe 30 min legs felt heavy"
+-> cardio Run outdoor 30 min 5 km, detail "legs felt heavy"`;
 
 // ---------- Telegram ----------
 function send(env: Env, chatId: string | number, text: string) {
@@ -215,14 +214,22 @@ function send(env: Env, chatId: string | number, text: string) {
 // ---------- Gemini (primary + fallback, with timeouts) ----------
 const TIMEOUTS_MS = [15000, 10000];
 
-async function callGemini(env: Env, model: string, text: string, timeoutMs: number): Promise<Response> {
+const BATCH_PROMPT = `BATCH MODE. The message is a numbered list of lines the user jotted at different times during one
+session (usually a workout). For EVERY event set "line" to the number of the line it came from.
+- Each line is usually ONE set: make one strength event per line ("bench 60x10" -> sets 1, reps 10, weight_kg 60;
+  "bench 3x10 60" on one line -> sets 3). Never merge lines into one event, even for the same exercise.
+- Use the same canonical exercise name for the same exercise across lines ("bench", "bp", "bench press" -> "Bench press").
+- A line that only names an exercise or says "same" / "again" / "+5" repeats the previous line's exercise with that change.
+- Do not set day_offset; times come from the lines. Lines with nothing loggable ("rest", "water") produce no event.`;
+
+async function callGemini(env: Env, model: string, text: string, timeoutMs: number, extra?: string): Promise<Response> {
   return fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: PROMPT }, { text: `Message: """${text}"""` }] }],
+        contents: [{ role: "user", parts: [{ text: PROMPT }, ...(extra ? [{ text: extra }] : []), { text: `Message: """${text}"""` }] }],
         generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0 },
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -230,13 +237,13 @@ async function callGemini(env: Env, model: string, text: string, timeoutMs: numb
   );
 }
 
-async function structure(env: Env, text: string): Promise<{ events: Ev[]; model: string }> {
+async function structure(env: Env, text: string, extra?: string, timeouts = TIMEOUTS_MS): Promise<{ events: Ev[]; model: string }> {
   const models = [env.GEMINI_MODEL, env.GEMINI_FALLBACK_MODEL].filter((m): m is string => !!m);
   let lastErr = "";
   for (const [i, model] of models.entries()) {
     let res: Response;
     try {
-      res = await callGemini(env, model, text, TIMEOUTS_MS[Math.min(i, TIMEOUTS_MS.length - 1)]);
+      res = await callGemini(env, model, text, timeouts[Math.min(i, timeouts.length - 1)], extra);
     } catch (e) {
       lastErr = `Gemini ${model} timed out or failed: ${(e as Error).name}`;
       console.log(lastErr);
@@ -336,7 +343,6 @@ async function saveEvents(env: Env, messageId: number, sentAtMs: number, events:
     if (e.at_time) {
       const [h, m] = e.at_time.split(":").map(Number);
       if (!isNaN(h) && !isNaN(m) && h >= 0 && h < 24 && m >= 0 && m < 60) {
-        // at_time is IST; build a UTC ms value for that clock time on the base date
         const istDateStr = new Date(baseUtcMs + 5.5 * 3600e3).toISOString().slice(0, 10);
         atMs = Date.parse(`${istDateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+05:30`);
       }
@@ -401,6 +407,8 @@ async function handleMessage(env: Env, msg: any) {
     return;
   }
 
+  if (await handleLive(env, msg, text.trim())) return;
+
   if (text === "/today") {
     await send(env, chatId, await todayText(env));
     return;
@@ -409,6 +417,17 @@ async function handleMessage(env: Env, msg: any) {
   if (text === "/undo") {
     const last = await env.DB.prepare(`SELECT id, text FROM messages ORDER BY id DESC LIMIT 1`).first<{ id: number; text: string }>();
     if (!last) return void (await send(env, chatId, "Nothing to undo."));
+    const batch = await env.DB.prepare(`SELECT batch_id FROM batch_lines WHERE message_id = ?`).bind(last.id).first<{ batch_id: string }>();
+    if (batch) {
+      const { results } = await env.DB.prepare(`SELECT message_id FROM batch_lines WHERE batch_id = ?`).bind(batch.batch_id).all<{ message_id: number }>();
+      for (const r of results) await deleteMessageRows(env, r.message_id);
+      await env.DB.batch([
+        env.DB.prepare(`DELETE FROM messages WHERE id IN (SELECT message_id FROM batch_lines WHERE batch_id = ?)`).bind(batch.batch_id),
+        env.DB.prepare(`DELETE FROM batch_lines WHERE batch_id = ?`).bind(batch.batch_id),
+      ]);
+      await send(env, chatId, `↩ removed the last batch (${results.length} lines and everything parsed from them)`);
+      return;
+    }
     await deleteMessageRows(env, last.id);
     await env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(last.id).run();
     await send(env, chatId, `↩ removed: "${last.text.slice(0, 80)}"`);
@@ -434,12 +453,198 @@ async function handleMessage(env: Env, msg: any) {
 
 // Shared by Telegram and the dashboard's quick capture.
 export async function logText(env: Env, text: string, sentAtMs: number, tgMessageId: number | null): Promise<string> {
+  if (isBatch(text)) return logBatch(env, text, sentAtMs, tgMessageId);
   // 1) store the raw message first, so nothing is ever lost
   const row = await env.DB.prepare(
     `INSERT INTO messages (tg_message_id, received_at, text, status) VALUES (?,?,?, 'needs_review') RETURNING id`,
   ).bind(tgMessageId, new Date(sentAtMs).toISOString(), text).first<{ id: number }>();
   // 2) structure it and write typed rows
   return processText(env, row!.id, sentAtMs, text);
+}
+
+// ---------- Batch notes (a whole workout pasted at once) ----------
+const MAX_BATCH_LINES = 80;
+
+async function logBatch(env: Env, text: string, sentAtMs: number, tgMessageId: number | null): Promise<string> {
+  return logLines(env, parseBatch(text, sentAtMs), tgMessageId);
+}
+
+async function logLines(env: Env, all: BatchLine[], tgMessageId: number | null): Promise<string> {
+  if (!all.length) return "Nothing to log.";
+  const lines = all.slice(0, MAX_BATCH_LINES);
+  const cut = all.length - lines.length;
+
+  // 1) skip lines already logged (same minute + same text), so re-sending a note never duplicates
+  const keys = lines.map(lineKey);
+  const seen = new Set<string>();
+  for (let i = 0; i < keys.length; i += 50) {
+    const chunk = keys.slice(i, i + 50);
+    const { results } = await env.DB.prepare(`SELECT line_key FROM batch_lines WHERE line_key IN (${chunk.map(() => "?").join(",")})`)
+      .bind(...chunk).all<{ line_key: string }>();
+    results.forEach((r) => seen.add(r.line_key));
+  }
+  const fresh = lines.filter((_, i) => !seen.has(keys[i]) && !keys.slice(0, i).includes(keys[i]));
+  const dup = lines.length - fresh.length;
+  if (!fresh.length) return `↺ All ${lines.length} lines were already logged. Nothing new saved.`;
+
+  // 2) store every new line as its own raw message at its own time (nothing is lost even if parsing fails)
+  const batchId = crypto.randomUUID();
+  const ins = await env.DB.batch(fresh.map((l, i) =>
+    env.DB.prepare(`INSERT INTO messages (tg_message_id, received_at, text, status) VALUES (?,?,?, 'needs_review') RETURNING id`)
+      .bind(i === 0 ? tgMessageId : null, new Date(l.atMs).toISOString(), l.text)));
+  const ids = ins.map((r) => (r.results[0] as { id: number }).id);
+  await env.DB.batch(fresh.map((l, i) =>
+    env.DB.prepare(`INSERT INTO batch_lines (line_key, batch_id, message_id, created_at) VALUES (?,?,?,?)`)
+      .bind(lineKey(l), batchId, ids[i], new Date().toISOString())));
+
+  // 3) one Gemini call for the whole batch
+  const numbered = fresh.map((l, i) => `${i + 1}. [${hhmm(l.atMs)}] ${l.text}`).join("\n");
+  let events: Ev[], model: string;
+  try {
+    ({ events, model } = await structure(env, numbered, BATCH_PROMPT, [25000, 25000]));
+  } catch (err) {
+    return `⚠ ${fresh.length} lines saved raw with their times, not structured yet (${(err as Error).message.slice(0, 100)}). Send /retry later.`;
+  }
+
+  // 4) attach each event to its line's time; fill rest from the gap between sets of the same exercise
+  const byLine = new Map<number, Ev[]>();
+  for (const e of events) {
+    const n = e.line && e.line >= 1 && e.line <= fresh.length ? e.line : 1;
+    byLine.set(n, [...(byLine.get(n) ?? []), e]);
+  }
+  const lastSet = new Map<string, number>();
+  const stmts: D1PreparedStatement[] = [];
+  const report: string[] = [];
+  let sets = 0, volume = 0;
+  const exercises = new Set<string>();
+  let first = Infinity, last = -Infinity;
+  fresh.forEach((l, i) => {
+    const evs = byLine.get(i + 1) ?? [];
+    if (!evs.length) { report.push(`· ${hhmm(l.atMs)} ${l.text.slice(0, 40)} → nothing stored`); return; }
+    for (const e of evs) {
+      if (e.type === "strength") {
+        const k = (e.exercise ?? e.summary).toLowerCase();
+        const prev = lastSet.get(k);
+        const gap = prev != null ? Math.round((l.atMs - prev) / 1000) : null;
+        if (e.rest_sec == null && gap != null && gap >= 15 && gap <= 900) e.rest_sec = gap;
+        lastSet.set(k, l.atMs);
+        sets += e.sets ?? 1;
+        volume += strengthVolume(e) ?? 0;
+        exercises.add(k);
+        first = Math.min(first, l.atMs); last = Math.max(last, l.atMs);
+      }
+      const st = insertFor(env.DB, e, ids[i], new Date(l.atMs).toISOString());
+      if (st) { stmts.push(st); report.push(`✓ ${hhmm(l.atMs)} ${e.summary}`); }
+    }
+  });
+  if (stmts.length) await env.DB.batch(stmts);
+  await env.DB.batch(ids.map((id) => env.DB.prepare(`UPDATE messages SET status = 'auto', model = ? WHERE id = ?`).bind(model, id)));
+
+  const head = [`📒 ${fresh.length} new line${fresh.length === 1 ? "" : "s"} logged`];
+  if (dup) head.push(`${dup} already logged, skipped`);
+  if (cut) head.push(`${cut} over the ${MAX_BATCH_LINES}-line limit, send them separately`);
+  const out = [head.join(" · "), ...report];
+  if (sets) {
+    const mins = Math.round((last - first) / 60e3);
+    out.push("", `Session ${hhmm(first)}–${hhmm(last)}${mins ? ` (${mins} min)` : ""} · ${exercises.size} exercise${exercises.size === 1 ? "" : "s"} · ${sets} sets${volume ? ` · ${Math.round(volume).toLocaleString("en-IN")} kg volume` : ""}`);
+  }
+  out.push("Wrong? /undo removes this whole batch.");
+  const msg = out.join("\n");
+  return msg.length > 3900 ? msg.slice(0, 3880) + "\n… (more in the dashboard)" : msg;
+}
+
+// ---------- Gym mode: type sets one by one in Telegram; each is stamped with its send time; /done parses all at once ----------
+const AUTO_CLOSE_MS = 3 * 3600e3;   // a session idle this long is closed and logged automatically
+
+type Live = { started_at: string; label: string | null; last_at: string | null; n: number };
+
+async function liveSession(env: Env): Promise<Live | null> {
+  return env.DB.prepare(
+    `SELECT s.started_at, s.label, (SELECT max(at) FROM live_lines) AS last_at, (SELECT count(*) FROM live_lines) AS n FROM live_session s WHERE s.id = 1`,
+  ).first<Live>();
+}
+
+async function closeSession(env: Env): Promise<string> {
+  const { results } = await env.DB.prepare(`SELECT at, text, tg_message_id FROM live_lines ORDER BY at, id`).all<{ at: string; text: string; tg_message_id: number | null }>();
+  const lines: BatchLine[] = results.map((r, i) => ({ idx: i + 1, text: r.text, atMs: Date.parse(r.at), timed: true }));
+  const reply = lines.length ? await logLines(env, lines, results[0]?.tg_message_id ?? null) : "Session was empty, nothing logged.";
+  // clear the buffer only after logging: logLines already stored every line as a message, so nothing is lost
+  await env.DB.batch([env.DB.prepare(`DELETE FROM live_lines`), env.DB.prepare(`DELETE FROM live_session`)]);
+  return reply;
+}
+
+function react(env: Env, chatId: number | string, messageId: number, emoji = "✍") {
+  return fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/setMessageReaction`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId, reaction: [{ type: "emoji", emoji }] }),
+  }).catch(() => undefined);
+}
+
+/** Returns true if the message was handled by gym mode. */
+async function handleLive(env: Env, msg: any, text: string): Promise<boolean> {
+  const chatId = msg.chat.id;
+  const cmd = text.split(/\s+/)[0].toLowerCase().replace(/@\w+$/, "");
+  if (cmd === "/gym" || cmd === "/session") {
+    const live = await liveSession(env);
+    if (live) return void (await send(env, chatId, `Already on: ${live.n} set${live.n === 1 ? "" : "s"} so far. /done to finish.`)), true;
+    const label = text.split(/\s+/).slice(1).join(" ").slice(0, 60) || null;
+    await env.DB.prepare(`INSERT INTO live_session (id, started_at, label) VALUES (1, ?, ?)`).bind(new Date(msg.date * 1000).toISOString(), label).run();
+    await send(env, chatId, `🏋 Gym mode on${label ? `: ${label}` : ""}. Send each set as you do it, e.g. "bench 60x10". I'll stamp the time and react ✍.\n/done to log everything · /status · /undo removes the last set · /cancel discards`);
+    return true;
+  }
+  const live = await liveSession(env);
+  if (!live) {
+    if (cmd === "/done" || cmd === "/cancel" || cmd === "/status") return void (await send(env, chatId, "No gym session running. Start one with /gym.")), true;
+    return false;
+  }
+  // a session left open too long is closed first, then this message is handled normally
+  const lastMs = Date.parse(live.last_at ?? live.started_at);
+  if (msg.date * 1000 - lastMs > AUTO_CLOSE_MS) {
+    await send(env, chatId, `⏱ Closed the open gym session (idle over 3 h):\n${await closeSession(env)}`);
+    return false;
+  }
+  if (cmd === "/done") return void (await send(env, chatId, await closeSession(env))), true;
+  if (cmd === "/cancel") {
+    await env.DB.batch([env.DB.prepare(`DELETE FROM live_lines`), env.DB.prepare(`DELETE FROM live_session`)]);
+    return void (await send(env, chatId, `🗑 Discarded ${live.n} unsent set${live.n === 1 ? "" : "s"}.`)), true;
+  }
+  if (cmd === "/status") {
+    const { results } = await env.DB.prepare(`SELECT at, text FROM live_lines ORDER BY at, id`).all<{ at: string; text: string }>();
+    const body = results.map((r) => `${hhmm(Date.parse(r.at))} ${r.text}`).join("\n") || "(nothing yet)";
+    return void (await send(env, chatId, `🏋 Since ${hhmm(Date.parse(live.started_at))}, ${live.n} set${live.n === 1 ? "" : "s"}:\n${body}`.slice(0, 3900))), true;
+  }
+  if (cmd === "/undo") {
+    const last = await env.DB.prepare(`SELECT id, text FROM live_lines ORDER BY at DESC, id DESC LIMIT 1`).first<{ id: number; text: string }>();
+    if (!last) return void (await send(env, chatId, "No sets in this session yet.")), true;
+    await env.DB.prepare(`DELETE FROM live_lines WHERE id = ?`).bind(last.id).run();
+    return void (await send(env, chatId, `↩ removed "${last.text.slice(0, 60)}"`)), true;
+  }
+  if (text.startsWith("/")) return false;   // other commands (/today) work as usual
+  // buffer: one row per line, stamped with Telegram's send time (seconds)
+  const at = new Date(msg.date * 1000).toISOString();
+  const parts = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 30);
+  await env.DB.batch(parts.map((p, i) =>
+    env.DB.prepare(`INSERT INTO live_lines (at, text, tg_message_id) VALUES (?,?,?)`).bind(at, p, i === 0 ? msg.message_id : null)));
+  await react(env, chatId, msg.message_id);
+  return true;
+}
+
+// POST /ingest/log — log free text from an iPhone Shortcut (same parsing as Telegram; reply shown as a notification).
+// Auth: X-Ryuk-Key = LOG_KEY. Body: {"text": "..."} or text/plain.
+async function handleLog(req: Request, env: Env): Promise<Response> {
+  if (req.method !== "POST") return json({ error: "not found" }, 404);
+  if (!env.LOG_KEY) return json({ error: "LOG_KEY not configured" }, 503);
+  if (!keyOk(req.headers.get("X-Ryuk-Key"), env.LOG_KEY)) return json({ error: "unauthorized" }, 401);
+  const raw = (await req.text()).slice(0, 4096);
+  let text = raw;
+  if ((req.headers.get("content-type") || "").includes("json")) {
+    try { text = String(JSON.parse(raw).text ?? ""); } catch { return json({ error: "invalid json" }, 400); }
+  }
+  text = text.trim().slice(0, 2000);
+  if (!text) return json({ error: "empty text" }, 400);
+  const reply = await logText(env, text, Date.now(), null);
+  return json({ status: "logged", reply });
 }
 
 // Private RPC entrypoint: only reachable through a Service Binding (the dashboard), never from the internet.
@@ -449,11 +654,55 @@ export class RyukRPC extends WorkerEntrypoint<Env> {
     if (!clean) return "Nothing to log.";
     return logText(this.env, clean, Date.now(), null);
   }
+  // Log one line at a given time; returns the message id (used when a task on the page is ticked done).
+  async captureOne(text: string, at: string): Promise<{ id: number; reply: string }> {
+    const clean = String(text ?? "").trim().slice(0, 500);
+    const atMs = Date.parse(at);
+    if (!clean || !Number.isFinite(atMs)) throw new Error("text and a valid time are required");
+    const row = await this.env.DB.prepare(`INSERT INTO messages (tg_message_id, received_at, text, status) VALUES (NULL, ?, ?, 'needs_review') RETURNING id`)
+      .bind(new Date(atMs).toISOString(), clean).first<{ id: number }>();
+    return { id: row!.id, reply: await processText(this.env, row!.id, atMs, clean) };
+  }
+
+  // Edit an already-logged line: new text and/or time; its rows are re-parsed at the new time.
+  async relog(id: number, text: string, at: string): Promise<string> {
+    const clean = String(text ?? "").trim().slice(0, 500);
+    const atMs = Date.parse(at);
+    if (!Number.isInteger(id) || !clean || !Number.isFinite(atMs)) throw new Error("id, text and a valid time are required");
+    const iso = new Date(atMs).toISOString();
+    const old = await this.env.DB.prepare(`SELECT id FROM messages WHERE id = ?`).bind(id).first();
+    if (!old) throw new Error("entry not found");
+    await deleteMessageRows(this.env, id);
+    await this.env.DB.batch([
+      this.env.DB.prepare(`UPDATE messages SET text = ?, received_at = ?, status = 'corrected' WHERE id = ?`).bind(clean, iso, id),
+      // keep resend-dedupe in step with the new text/time
+      this.env.DB.prepare(`UPDATE OR IGNORE batch_lines SET line_key = ? WHERE message_id = ?`).bind(lineKey({ idx: 1, text: clean, atMs, timed: true }), id),
+    ]);
+    const reply = await processText(this.env, id, atMs, clean);
+    await this.env.DB.prepare(`UPDATE messages SET status = 'corrected' WHERE id = ? AND status = 'auto'`).bind(id).run();
+    return reply;
+  }
+
+  // Dashboard notepad: each line carries the time it was written in the browser.
+  async captureLines(lines: { text: string; at: string }[]): Promise<string> {
+    const now = Date.now();
+    const clean: BatchLine[] = (Array.isArray(lines) ? lines : [])
+      .map((l) => ({ text: String(l?.text ?? "").trim().slice(0, 300), atMs: Date.parse(String(l?.at ?? "")) }))
+      .filter((l) => l.text && Number.isFinite(l.atMs) && l.atMs <= now + 5 * 60e3 && now - l.atMs <= 7 * 86400e3)
+      .sort((a, b) => a.atMs - b.atMs)
+      .slice(0, MAX_BATCH_LINES)
+      .map((l, i) => ({ idx: i + 1, text: l.text, atMs: l.atMs, timed: true }));
+    if (!clean.length) return "Nothing to log (lines need text and a time from the last 7 days).";
+    return logLines(this.env, clean, null);
+  }
 }
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    if (new URL(req.url).pathname.startsWith("/ingest/")) return handleIngest(req, env);
+    const path = new URL(req.url).pathname;
+    if (path === "/ingest/health") return handleHealth(req, env);
+    if (path === "/ingest/log") return handleLog(req, env);
+    if (path.startsWith("/ingest/")) return handleIngest(req, env);
     if (req.method !== "POST" || req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
       return new Response("ok");
     }
@@ -478,6 +727,10 @@ export default {
 
   // Daily summary at 22:00 IST (cron in wrangler.toml)
   async scheduled(_evt: ScheduledController, env: Env): Promise<void> {
+    const live = await liveSession(env);
+    if (live && Date.now() - Date.parse(live.last_at ?? live.started_at) > AUTO_CLOSE_MS) {
+      await send(env, env.OWNER_CHAT_ID, `⏱ Closed the open gym session:\n${await closeSession(env)}`);
+    }
     await send(env, env.OWNER_CHAT_ID, `📓 Today\n${await todayText(env)}\n\nSend energy and focus (1-5) if you haven't.`);
   },
 };

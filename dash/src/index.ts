@@ -4,13 +4,15 @@
  * so the data stays private even if Access is ever switched off by mistake.
  */
 import PAGE from "./page.html";
+import { type BotRPC, addLibrary, addTask, deleteLibrary, deleteTask, editEntry, editLibrary, editTask, getPage, libraryProgress, serveFile, upload } from "./extra";
 
 export interface Env {
   DB: D1Database;
   TEAM_DOMAIN: string;     // e.g. "yourteam.cloudflareaccess.com"
   POLICY_AUD: string;      // Access application "Application Audience (AUD) Tag"
   ALLOWED_EMAIL: string;   // the only email allowed in
-  BOT?: { capture(text: string): Promise<string> }; // Service Binding to the bot's RyukRPC entrypoint
+  BOT?: BotRPC;            // Service Binding to the bot's RyukRPC entrypoint
+  FILES?: R2Bucket;        // R2 bucket for shelf uploads (optional)
 }
 
 // ---------- Access JWT verification ----------
@@ -31,23 +33,27 @@ async function getKeys(env: Env): Promise<Jwk[]> {
   return data.keys;
 }
 
-async function verifyAccess(req: Request, env: Env): Promise<string | null> {
+// Returns the signed-in email, or a short reason code (shown on the Forbidden page; reveals no values).
+async function verifyAccess(req: Request, env: Env): Promise<{ email?: string; reason?: string }> {
+  if (!env.TEAM_DOMAIN || env.TEAM_DOMAIN.startsWith("REPLACE") || !env.POLICY_AUD || env.POLICY_AUD.startsWith("REPLACE")) return { reason: "config_missing" };
   const token = req.headers.get("Cf-Access-Jwt-Assertion");
-  if (!token || !env.TEAM_DOMAIN || !env.POLICY_AUD) return null;
+  if (!token) return { reason: "no_access_token" };
   const [h, p, sig] = token.split(".");
-  if (!h || !p || !sig) return null;
+  if (!h || !p || !sig) return { reason: "bad_token" };
   const header = b64urlJson(h);
   const payload = b64urlJson(p);
-  const jwk = (await getKeys(env)).find((k) => k.kid === header.kid);
-  if (!jwk) return null;
+  let keys: Jwk[];
+  try { keys = await getKeys(env); } catch { return { reason: "team_domain_unreachable" }; }
+  const jwk = keys.find((k) => k.kid === header.kid);
+  if (!jwk) return { reason: "team_domain_mismatch" };
   const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
   const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToBytes(sig), new TextEncoder().encode(`${h}.${p}`));
-  if (!ok) return null;
+  if (!ok) return { reason: "bad_signature" };
   const aud: string[] = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(env.POLICY_AUD)) return null;
-  if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return null;
-  if (env.ALLOWED_EMAIL && String(payload.email).toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase()) return null;
-  return payload.email as string;
+  if (!aud.includes(env.POLICY_AUD)) return { reason: "aud_mismatch" };
+  if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return { reason: "expired" };
+  if (env.ALLOWED_EMAIL && String(payload.email ?? "").toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase()) return { reason: "email_mismatch" };
+  return { email: payload.email as string };
 }
 
 // ---------- Data API ----------
@@ -67,6 +73,7 @@ const EDITABLE: Record<string, string[]> = {
   pins:     ["kind", "title", "note", "image_url"],
   transactions: ["counterparty", "category", "kind", "purpose", "status", "note"],
   merchant_rules: ["display_name", "category", "kind", "ignore"],
+  health_daily: [],   // read-only: comes from Apple Health
 };
 const NUMERIC = new Set(["ignore", "sets", "reps", "weight_kg", "volume_kg", "rpe", "rest_sec", "duration_min", "distance_km",
   "avg_pace_sec_km", "avg_speed_kmh", "cadence_spm", "avg_hr", "max_hr", "elevation_gain_m", "calories", "steps",
@@ -90,6 +97,8 @@ async function getData(env: Env, days: number) {
         ? env.DB.prepare(`SELECT * FROM transactions WHERE txn_at >= ? ORDER BY txn_at DESC LIMIT 5000`).bind(since)
       : t === "merchant_rules"
         ? env.DB.prepare(`SELECT * FROM merchant_rules ORDER BY created_at DESC LIMIT 1000`)
+      : t === "health_daily"
+        ? env.DB.prepare(`SELECT rowid AS id, * FROM health_daily WHERE date >= ? ORDER BY date DESC LIMIT 1000`).bind(since.slice(0, 10))
         : env.DB.prepare(`SELECT * FROM ${t} WHERE logged_at >= ? ORDER BY logged_at DESC LIMIT 5000`).bind(since),
   );
   // 365-day activity counts per IST day, for the heatmap (one query per table; D1 limits UNIONs)
@@ -104,6 +113,8 @@ async function getData(env: Env, days: number) {
     (r.results as { d: string; n: number }[]).forEach(({ d, n }) => counts.set(d, (counts.get(d) || 0) + n)),
   );
   out.daily_counts = [...counts].map(([d, n]) => ({ d, n })).sort((a, b) => a.d.localeCompare(b.d));
+  out.library = (await env.DB.prepare(`SELECT * FROM library ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'wishlist' THEN 2 ELSE 3 END, updated_at DESC LIMIT 500`).all()).results;
+  (out as any).uploads = !!env.FILES;
   return out;
 }
 
@@ -117,7 +128,7 @@ async function editRow(env: Env, body: any) {
     if (!Number.isFinite(value)) return json({ error: "not a number" }, 400);
   }
   if (field === "logged_at" && value !== null && Number.isNaN(Date.parse(value))) return json({ error: "bad date" }, 400);
-  if (field === "image_url" && value !== null && !/^https:\/\/[^\s"'<>]+$/i.test(String(value))) return json({ error: "image must be an https link" }, 400);
+  if (field === "image_url" && value !== null && !/^(https:\/\/[^\s"'<>]+|\/api\/file\/files\/[a-f0-9-]{36}\/[\w.\-]{1,120})$/i.test(String(value))) return json({ error: "image must be an https link or an upload" }, 400);
   await env.DB.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).bind(value, id).run();
   if (table === "transactions" && ["counterparty", "category", "kind"].includes(field)) {
     // Teach once: remember the correction for this merchant and apply it to its other, unconfirmed rows.
@@ -158,6 +169,17 @@ async function capture(env: Env, body: any) {
   return json({ reply });
 }
 
+// Notepad: lines stamped in the browser as they were typed; the bot logs them in one batch (re-sending is safe).
+async function notepad(env: Env, body: any) {
+  const lines = Array.isArray(body?.lines) ? body.lines.slice(0, 80) : [];
+  const clean = lines
+    .map((l: any) => ({ text: String(l?.text ?? "").trim().slice(0, 300), at: String(l?.at ?? "") }))
+    .filter((l: { text: string; at: string }) => l.text && !Number.isNaN(Date.parse(l.at)));
+  if (!clean.length) return json({ error: "no lines" }, 400);
+  if (!env.BOT) return json({ error: "BOT service binding missing" }, 500);
+  return json({ reply: await env.BOT.captureLines(clean) });
+}
+
 async function deleteRow(env: Env, body: any) {
   const { table, id } = body ?? {};
   if (!TABLES.includes(table) || !Number.isInteger(id)) return json({ error: "bad request" }, 400);
@@ -165,18 +187,20 @@ async function deleteRow(env: Env, body: any) {
     const children = EVENT_TABLES;
     await env.DB.batch([
       ...children.map((t) => env.DB.prepare(`DELETE FROM ${t} WHERE message_id = ?`).bind(id)),
+      env.DB.prepare(`DELETE FROM batch_lines WHERE message_id = ?`).bind(id),
       env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(id),
     ]);
   } else {
-    await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
+    const idCol = table === "health_daily" ? "rowid" : "id";
+    await env.DB.prepare(`DELETE FROM ${table} WHERE ${idCol} = ?`).bind(id).run();
   }
   return json({ ok: true });
 }
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const email = await verifyAccess(req, env).catch(() => null);
-    if (!email) return new Response("Forbidden", { status: 403 });
+    const auth = await verifyAccess(req, env).catch(() => ({ reason: "verify_error" }) as { email?: string; reason?: string });
+    if (!auth.email) return new Response(`Forbidden (${auth.reason})`, { status: 403, headers: { "cache-control": "no-store" } });
 
     const url = new URL(req.url);
     if (url.pathname === "/" && req.method === "GET") {
@@ -185,7 +209,7 @@ export default {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
           "content-security-policy":
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: https:",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'",
         },
       });
     }
@@ -197,6 +221,18 @@ export default {
     if (url.pathname === "/api/row" && req.method === "DELETE") return deleteRow(env, await req.json());
     if (url.pathname === "/api/pins" && req.method === "POST") return addPin(env, await req.json());
     if (url.pathname === "/api/capture" && req.method === "POST") return capture(env, await req.json());
+    if (url.pathname === "/api/notepad" && req.method === "POST") return notepad(env, await req.json());
+    if (url.pathname === "/api/page" && req.method === "GET") return getPage(env, url.searchParams.get("day") ?? "");
+    if (url.pathname === "/api/entry" && req.method === "PATCH") return editEntry(env, await req.json());
+    if (url.pathname === "/api/tasks" && req.method === "POST") return addTask(env, await req.json());
+    if (url.pathname === "/api/tasks" && req.method === "PATCH") return editTask(env, await req.json());
+    if (url.pathname === "/api/tasks" && req.method === "DELETE") return deleteTask(env, await req.json());
+    if (url.pathname === "/api/library" && req.method === "POST") return addLibrary(env, await req.json());
+    if (url.pathname === "/api/library" && req.method === "PATCH") return editLibrary(env, await req.json());
+    if (url.pathname === "/api/library" && req.method === "DELETE") return deleteLibrary(env, await req.json());
+    if (url.pathname === "/api/library/progress" && req.method === "POST") return libraryProgress(env, await req.json());
+    if (url.pathname === "/api/upload" && req.method === "POST") return upload(req, env);
+    if (url.pathname.startsWith("/api/file/") && (req.method === "GET" || req.method === "HEAD")) return serveFile(req, env, decodeURIComponent(url.pathname.slice("/api/file/".length)));
     return new Response("Not found", { status: 404 });
   },
 };

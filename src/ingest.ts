@@ -16,7 +16,7 @@ export interface IngestEnv {
   FINANCE_ALERTS?: string;      // var, "1" (default) sends a detail-free Telegram ping for flagged transactions
 }
 
-const json = (data: unknown, status = 200) =>
+export const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 async function sha256(s: string): Promise<string> {
@@ -24,7 +24,7 @@ async function sha256(s: string): Promise<string> {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function keyOk(given: string | null, expected: string | undefined): boolean {
+export function keyOk(given: string | null, expected: string | undefined): boolean {
   if (!given || !expected) return false;
   const a = new TextEncoder().encode(given), b = new TextEncoder().encode(expected);
   if (a.length !== b.length) return false;

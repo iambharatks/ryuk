@@ -1,0 +1,27 @@
+name = "ryuk-dash"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+preview_urls = false
+
+# page.html is bundled as a text string
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = false
+
+[vars]
+TEAM_DOMAIN = "iambharatks.cloudflareaccess.com"   # Zero Trust team domain
+POLICY_AUD = "2845e126eb4016b85221fe32316fd21ffb54a99496bc149e80bbacb22f88658a"     # Access app "Application Audience (AUD) Tag"
+ALLOWED_EMAIL = "iambharatks@gmail.com"
+
+# Same database as the bot (copy database_id from ../wrangler.toml)
+[[d1_databases]]
+binding = "DB"
+database_name = "ryuk"
+database_id = "53064e2a-fc9f-4650-a328-7a3733bdb4dd"
+
+# Private link to the bot's RyukRPC entrypoint (used by quick capture)
+[[services]]
+binding = "BOT"
+service = "ryuk"
+entrypoint = "RyukRPC"

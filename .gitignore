@@ -3,3 +3,11 @@ node_modules/
 .dev.vars
 .env
 *.log
+dash/ui/dist/
+dash/ui/dist-demo/
+
+# local DB exports (sensitive)
+backup-*.sql
+*.age
+.claude/settings.local.json
+.local/

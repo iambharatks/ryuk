@@ -1,16 +1,25 @@
 name = "ryuk"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
+preview_urls = false
 
 [vars]
 OWNER_CHAT_ID = "1104395846"
 NOTION_DB_ID = "421c0614e01681bdb52fd9f6ae643e13"
-GEMINI_MODEL = "gemini-3.8-flash"
-GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_FALLBACK_MODEL = "gemini-3.8-flash"
+LARGE_TXN_INR = "5000"      # transactions at or above this are flagged "large"
+FINANCE_ALERTS = "1"        # "1" = detail-free Telegram ping for flagged transactions, "0" = off
 
 # 22:00 IST daily summary
 [triggers]
 crons = ["30 16 * * *"]
+
+# Shared database (same database_id goes in dash/wrangler.toml)
+[[d1_databases]]
+binding = "DB"
+database_name = "ryuk"
+database_id = "53064e2a-fc9f-4650-a328-7a3733bdb4dd"
 
 # Secrets (set with `npx wrangler secret put NAME`, never commit them):
 # TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, NOTION_TOKEN

@@ -1,13 +1,19 @@
 {
-  "name": "lifelog-worker",
+  "name": "ryuk",
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:ui": "cd dash/ui && npm install && npm run build && node -e \"require('fs').copyFileSync('dist/index.html','../src/page.html')\"",
+    "deploy:bot": "wrangler deploy",
+    "deploy:dash": "npm run build:ui && wrangler deploy --config dash/wrangler.toml",
+    "build:demo": "cd dash/ui && VITE_DEMO=1 npx vite build --outDir dist-demo",
+    "test:sms": "esbuild src/sms.ts --bundle --format=esm --platform=neutral --outfile=.wrangler/sms-test.mjs --log-level=warning && node tests/sms.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261123.1",
+    "esbuild": "^0.24.2",
     "typescript": "^5.6.0",
     "wrangler": "^4.0.0"
   }

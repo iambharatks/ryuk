@@ -163,7 +163,7 @@ export function demoStore(): Store {
   return {
     demo: true,
     uploads: true,
-    async page(day) { await wait(200); return { day, entries: clone(entries.filter((e) => dayOf(e.received_at) === day).sort((a, b) => a.received_at.localeCompare(b.received_at))), tasks: clone(tasks.filter((t) => t.day === day)) }; },
+    async page(day) { await wait(200); return { day, entries: clone(entries.filter((e) => dayOf(e.received_at) === day).sort((a, b) => a.received_at.localeCompare(b.received_at))), tasks: clone(tasks.filter((t) => t.day <= day && (!t.done_at || dayOf(t.done_at) >= day)).sort((a, b) => a.day.localeCompare(b.day) || a.position - b.position || a.id - b.id)) }; },
     async writeLines(lines) {
       await wait(700);
       const out = lines.map((l) => { const e: Entry = { id: nextId++, received_at: l.at, text: l.text, status: "auto", parsed: guess(l.text) }; entries.push(e); return `✓ ${new Date(l.at).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })} ${e.parsed[0].summary}`; });

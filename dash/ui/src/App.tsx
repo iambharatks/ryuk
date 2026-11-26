@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Command, PenLine, RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
-import { Data, NewPin, Pin, apiAddPin, apiCapture, apiDeletePin, apiRow, demoData, fetchData } from "./data";
+import { Data, NewPin, Pin, apiAddPin, apiDeletePin, apiRow, demoData, fetchData } from "./data";
 import { DeathPage } from "./components/DeathPage";
 import { Shelf } from "./components/Shelf";
 import { apiStore, demoStore, type Store } from "./store";
 import { Emblem, LiveDot } from "./components/ui";
 import { Overview } from "./components/Overview";
-import { CaptureModal, ChronicleView, TelemetryView, VaultView } from "./components/Views";
+import { ChronicleView, TelemetryView, VaultView } from "./components/Views";
 import { OWNER } from "./config";
 import { AppleDrop, Ash, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } from "./components/Lore";
 import { lastDays } from "./data";
@@ -25,7 +25,8 @@ export default function App() {
   const [data, setData] = useState<Data | null>(null);
   const [state, setState] = useState<"loading" | "synced" | "error">("loading");
   const [err, setErr] = useState("");
-  const [capture, setCapture] = useState(false);
+  const [write, setWrite] = useState(0);      // bumped to open today's page with the pen on the next line
+  const startWriting = () => { setView("Page"); setWrite((n) => n + 1); };
   const [toast, setToast] = useState("");
   const [apple, setApple] = useState(0);
   const [eyesOpen, setEyesOpen] = useState(false);
@@ -51,18 +52,13 @@ export default function App() {
   useEffect(() => { try { history.replaceState(null, "", "#" + view.toLowerCase() + location.search); } catch { /* sandboxed previews */ } }, [view]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCapture((c) => !c); }
-      if (e.key === "Escape") setCapture(false);
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); startWriting(); }
       const typing = /INPUT|TEXTAREA/.test((e.target as HTMLElement).tagName) || (e.target as HTMLElement).isContentEditable;
       if (!typing && !e.metaKey && !e.ctrlKey && e.key.toLowerCase() === "e") setEyesOpen((o) => !o);
     };
     window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
   }, []);
 
-  const onCapture = async (text: string) => {
-    if (DEMO) return "✓ (demo) inscribed:\n" + text;
-    const reply = await apiCapture(text); load(); return reply;
-  };
   const onAddPin = async (p: NewPin) => {
     const pin: Pin = DEMO
       ? { id: Date.now(), created_at: new Date().toISOString(), kind: p.image_url ? "media" : "inspiration", title: p.title, note: p.quote ?? null, image_url: p.image_url ?? null, link: p.link ?? null, position: null }
@@ -168,7 +164,7 @@ export default function App() {
         {!data && state === "loading" && view !== "Page" && view !== "Shelf" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
         <div key={view} className="view-fade">
         {data && view === "Gaze" && <Overview data={data} store={store} onAddPin={onAddPin} onDeletePin={onDeletePin} opening={opening} onOpenNotebook={openNotebook} notebookStats={notebookStats} demo={DEMO} />}
-        {view === "Page" && <DeathPage store={store} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
+        {view === "Page" && <DeathPage store={store} write={write} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
         {view === "Shelf" && <Shelf store={store} onChanged={() => { if (!DEMO) load(); }} />}
         {data && view === "Notebook" && <ChronicleView data={data} />}
         {data && view === "Ledger" && <VaultView data={data} onEdit={onEdit} onDelete={onDelete} />}
@@ -178,7 +174,7 @@ export default function App() {
 
       {/* ---------- quick capture ---------- */}
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center px-4" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <button onClick={() => setCapture(true)}
+        <button onClick={startWriting}
           className="pointer-events-auto group flex items-center gap-3 rounded-full border border-hairline bg-surface/85 py-2.5 pl-4 pr-2.5 shadow-[0_12px_40px_-12px_rgba(0,0,0,.8)] backdrop-blur-md transition-colors hover:border-hover">
           <PenLine size={15} className="text-apple" />
           <span className="text-[13.5px] text-ink">Write in the notebook</span>
@@ -186,7 +182,6 @@ export default function App() {
         </button>
       </div>
       {data && <ShinigamiEyes open={eyesOpen} onClose={() => setEyesOpen(false)} data={data} />}
-      <CaptureModal open={capture} onClose={() => setCapture(false)} onSubmit={onCapture} onInscribed={() => { setApple((n) => n + 1); flash("Inscribed"); }} />
 
       <div role="status" className={`fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-full border border-hairline bg-raised px-4 py-2 font-mono text-[11px] text-ink transition-opacity ${toast ? "opacity-100" : "pointer-events-none opacity-0"}`}>{toast}</div>
     </div>

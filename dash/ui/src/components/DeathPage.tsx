@@ -38,13 +38,7 @@ function Nib() {
   );
 }
 
-function Strike() {
-  return (
-    <svg className="dn-strike pointer-events-none absolute inset-x-3 bottom-[14px] h-[14px] w-[calc(100%-24px)]" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden>
-      <path pathLength={1} d="M1 9 C 18 5, 30 11, 48 7 S 80 4, 99 8" fill="none" stroke="#7d1a12" strokeWidth="2.4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
+const shortDate = (day: string) => new Date(`${day}T12:00:00+05:30`).toLocaleDateString("en-GB", { timeZone: TZ, day: "numeric", month: "short" });
 
 function HandBox({ done }: { done: boolean }) {
   return (
@@ -55,7 +49,7 @@ function HandBox({ done }: { done: boolean }) {
   );
 }
 
-export function DeathPage({ store, onChanged, onApple }: { store: Store; onChanged?: () => void; onApple?: () => void }) {
+export function DeathPage({ store, onChanged, onApple, write = 0 }: { store: Store; onChanged?: () => void; onApple?: () => void; write?: number }) {
   const today = istDay();
   const [day, setDay] = useState(today);
   // page turn: a snapshot of the page being left rides on a leaf that turns on the spine
@@ -89,6 +83,15 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
   const touch = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => saveDrafts(drafts), [drafts]);
+  // "Write in the notebook" (button or Ctrl/⌘K): go to today's page and put the pen on the next line
+  useEffect(() => {
+    if (!write) return;
+    setEditing(null);
+    const turning = day !== today;
+    if (turning) turnTo(today, "next");
+    const t = setTimeout(() => inputRef.current?.focus(), turning ? 700 : 60);
+    return () => clearTimeout(t);
+  }, [write]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(t); }, []);
 
   const load = useCallback(async (d: string) => {
@@ -113,7 +116,10 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
   const tasks = page?.tasks ?? [];
   const pencilCount = drafts.filter((d) => istDay(d.at) === day).length;
   const inkCount = page?.entries.length ?? 0;
-  const kept = tasks.filter((t) => t.done_at).length;
+  // tasks carry forward until kept; one kept on a later day shows as still open on this (earlier) page
+  const keptOn = (t: Task) => (t.done_at ? istDay(Date.parse(t.done_at)) : null);
+  const keptHere = (t: Task) => keptOn(t) === day;
+  const kept = tasks.filter(keptHere).length;
 
   // ---------- writing ----------
   const writeInk = async (only?: Draft[]) => {
@@ -312,19 +318,29 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
 
           {/* intentions */}
           <div className="dn-label">Intentions {tasks.length ? `· ${kept} of ${tasks.length} kept` : "· write [] before a line"}</div>
-          {tasks.map((t) => editing?.kind === "task" && editing.id === t.id ? editorRow(`t${t.id}`) : (
-            <div key={`t${t.id}`} className={`dn-row group ${erasing.has(`t${t.id}`) ? "dn-erase" : ""}`}>
-              <div className="dn-time">{t.done_at ? hhmm(Date.parse(t.done_at)) : ""}</div>
-              <div className="relative flex min-w-0 items-end">
-                <button onClick={() => toggleTask(t)} aria-label={t.done_at ? "Mark not done" : "Mark done"} className="mb-[9px] ml-3 shrink-0"><HandBox done={!!t.done_at} /></button>
-                <button onClick={() => openEdit("task", t.id, t.text, t.done_at ? Date.parse(t.done_at) : null)} className="relative min-w-0 text-left">
-                  <span className={`dn-hand block ${t.done_at ? "text-[rgba(21,18,14,.55)]" : "dn-ink"} ${fresh.has(`t${t.id}`) ? "dn-write" : ""}`} style={{ ["--dur" as any]: durFor(t.text) }}>{t.text}</span>
-                  {t.done_at && (struck.has(t.id) ? <Strike /> : <svg className="pointer-events-none absolute inset-x-3 bottom-[14px] h-[14px] w-[calc(100%-24px)]" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden><path d="M1 9 C 18 5, 30 11, 48 7 S 80 4, 99 8" fill="none" stroke="#7d1a12" strokeWidth="2.4" strokeLinecap="round" vectorEffect="non-scaling-stroke" /></svg>)}
-                </button>
+          {tasks.map((t) => {
+            if (editing?.kind === "task" && editing.id === t.id) return editorRow(`t${t.id}`);
+            const done = keptHere(t);
+            const later = !!t.done_at && !done;                               // kept on a later page
+            return (
+              <div key={`t${t.id}`} className={`dn-row group ${erasing.has(`t${t.id}`) ? "dn-erase" : ""}`}>
+                <div className="dn-time">{done ? hhmm(Date.parse(t.done_at!)) : ""}</div>
+                <div className="relative flex min-w-0 items-end">
+                  <button onClick={() => toggleTask(t)} disabled={later} aria-label={done ? "Mark not done" : "Mark done"}
+                    title={later ? `Kept on ${shortDate(keptOn(t)!)}` : undefined} className="mb-[9px] ml-3 shrink-0 disabled:opacity-40"><HandBox done={done} /></button>
+                  <button onClick={() => openEdit("task", t.id, t.text, t.done_at ? Date.parse(t.done_at) : null)} className="relative min-w-0 text-left">
+                    <span className={`dn-hand block dn-ink ${fresh.has(`t${t.id}`) ? "dn-write" : ""}`} style={{ ["--dur" as any]: durFor(t.text) }}>
+                      <span className={done ? `dn-hl ${struck.has(t.id) ? "swipe" : ""}` : ""}>{t.text}</span>
+                    </span>
+                  </button>
+                </div>
+                <div className="flex items-end pb-[11px]">
+                  {t.day < day && <span title={`Written on ${shortDate(t.day)}, carried forward`} className="font-mono text-[10px] text-[rgba(60,50,40,.55)]">from {shortDate(t.day)}</span>}
+                  {later && <span className="ml-1.5 font-mono text-[10px] text-[rgba(120,30,22,.6)]">· kept {shortDate(keptOn(t)!)}</span>}
+                </div>
               </div>
-              <div />
-            </div>
-          ))}
+            );
+          })}
 
           {/* what was written */}
           <div className="dn-label">Written</div>

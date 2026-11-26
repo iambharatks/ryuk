@@ -18,9 +18,9 @@ Stack: React 18, Vite, Tailwind 3, lucide-react, single-file build. Source `dash
 
 ## Theme (keep it)
 Colours: bg `#0B0B0E`, surface `#141419`, line `#24242C`, ink `#F4F4F6`, slate `#8E8E9A`, apple red `#C84B31`.
-Fonts (inlined via @fontsource): Inter (UI), Instrument Serif (headings), JetBrains Mono (numbers), Jacquard 24 = `font-frak` (notebook lettering), Grenze Gotisch, Share Tech Mono (Eyes).
+Fonts (inlined via @fontsource): Mansalva (UI, headings and notebook handwriting: `font-sans`, `font-serif`, `font-hand` all map to it), JetBrains Mono (numbers, labels), Jacquard 24 = `font-frak` (RYUK wordmark, page numbers), Grenze Gotisch, Share Tech Mono (Eyes).
+Desk notebook cover (Gaze): `src/assets/notebook-cover.jpg`, portrait, chosen by the owner; inlined as a data URI by the build.
 Grid: use `minmax(0,1fr)` columns (prevents mobile overflow). Respect `prefers-reduced-motion`.
-Original art only — no real anime characters, logos, or copied lettering.
 
 ## Planned restructure (not built yet — confirm with user before starting)
 Sections: **Today** (daily routine), **Body** (gym + food + sleep), **Mind** (work, learning, reading), **Coin** (transactions, rules, filters, monthly spend by category/merchant), **The Arc** (story view: where you started → where you are, trend lines over months).

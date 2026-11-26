@@ -39,7 +39,9 @@ export async function getPage(env: ExtraEnv, day: string) {
   const inDay = `SELECT id FROM messages WHERE received_at >= ? AND received_at < ?`;
   const res = await env.DB.batch([
     env.DB.prepare(`SELECT id, received_at, text, status FROM messages WHERE received_at >= ? AND received_at < ? ORDER BY received_at, id`).bind(from, to),
-    env.DB.prepare(`SELECT * FROM tasks WHERE day = ? ORDER BY position, id`).bind(day),
+    // a task lives from the day it was written until the day it was kept: open ones carry forward,
+    // a kept one stays (highlighted) on the page of the day it was done and is gone from the next.
+    env.DB.prepare(`SELECT * FROM tasks WHERE day <= ? AND (done_at IS NULL OR done_at >= ?) ORDER BY day, position, id`).bind(day, from),
     ...EVENT_TABLES.map((t) => env.DB.prepare(`SELECT message_id, summary FROM ${t} WHERE message_id IN (${inDay})`).bind(from, to)),
   ]);
   const parsed = new Map<number, { table: string; summary: string }[]>();

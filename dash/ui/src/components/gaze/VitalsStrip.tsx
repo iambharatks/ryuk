@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Drumstick, Droplets, Flame, Footprints, Gauge, Moon, Route, Timer } from "lucide-react";
-import { Data, byDay, lastDays, shortDay, todayKey } from "../../data";
+import { BookOpen, Briefcase, Drumstick, Dumbbell, Footprints, Moon } from "lucide-react";
+import { Data, byDay, lastDays, shortDay } from "../../data";
 
 type Metric = {
   key: string; label: string; icon: JSX.Element;
@@ -8,7 +8,6 @@ type Metric = {
   fmt: (n: number) => string;
   unit: string;
   target?: number;                // red when reached
-  best?: boolean;                 // red when today beats every earlier day loaded
 };
 
 const hm = (m: number) => `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, "0")}m`;
@@ -29,42 +28,35 @@ export function VitalsStrip({ data }: { data: Data }) {
   const metrics = useMemo<Metric[]>(() => {
     const days = lastDays(7);
     const health = new Map((data.health_log ?? []).map((h) => [h.date, h]));
-    const h = (k: "steps" | "exercise_minutes" | "running_speed" | "walk_run_distance" | "active_cal") =>
-      days.map((d) => health.get(d)?.[k] ?? null);
+    const h = (k: "steps" | "exercise_minutes") => days.map((d) => health.get(d)?.[k] ?? null);
+    const logged = (m: Map<string, number>) => days.map((d) => m.get(d) ?? null);
     // sleep is dated to the night it started: a day's value is the night before it, else Apple Health's number
     const sleepBy = byDay(data.sleep, (r) => r.duration_min);
     const prev = (d: string) => new Date(Date.parse(d + "T12:00:00Z") - 86400e3).toISOString().slice(0, 10);
     const sleep = days.map((d) => sleepBy.get(prev(d)) ?? sleepBy.get(d) ?? health.get(d)?.sleep_minutes ?? null);
-    const waterBy = byDay(data.water, (r) => r.ml);
-    const proteinBy = byDay(data.meals, (r) => r.protein_g_est);
-    const logged = (m: Map<string, number>) => days.map((d) => m.get(d) ?? null);
+    // exercise: logged training (cardio minutes + ~3 min per lifting set) or Apple's exercise minutes, whichever is
+    // larger. Not added together: the watch already counts the same gym session or run.
+    const train = new Map(byDay(data.cardio, (r) => r.duration_min));
+    for (const [k, v] of byDay(data.strength, (r) => (r.sets ?? 1) * 3)) train.set(k, (train.get(k) || 0) + v);
+    const apple = h("exercise_minutes");
+    const exercise = days.map((d, i) => { const a = apple[i], t = train.get(d); return a == null && t == null ? null : Math.max(a ?? 0, t ?? 0); });
+    const mins = (kind: string) => logged(byDay(data.time_log.filter((r) => r.kind === kind), (r) => r.duration_min));
     return [
       { key: "steps", label: "steps", icon: <Footprints size={14} />, series: h("steps"), fmt: (n) => Math.round(n).toLocaleString("en-IN"), unit: "", target: 10000 },
-      { key: "exercise", label: "exercise", icon: <Timer size={14} />, series: h("exercise_minutes"), fmt: (n) => String(Math.round(n)), unit: "min", target: 30 },
-      { key: "speed", label: "run speed", icon: <Gauge size={14} />, series: h("running_speed"), fmt: (n) => n.toFixed(1), unit: "km/h", best: true },
-      { key: "distance", label: "walk / run", icon: <Route size={14} />, series: h("walk_run_distance"), fmt: (n) => n.toFixed(1), unit: "km", best: true },
-      { key: "calories", label: "active kcal", icon: <Flame size={14} />, series: h("active_cal"), fmt: (n) => String(Math.round(n)), unit: "", target: 500 },
+      { key: "protein", label: "protein", icon: <Drumstick size={14} />, series: logged(byDay(data.meals, (r) => r.protein_g_est)), fmt: (n) => String(Math.round(n)), unit: "g", target: 80 },
+      { key: "exercise", label: "exercise", icon: <Dumbbell size={14} />, series: exercise, fmt: (n) => String(Math.round(n)), unit: "min", target: 30 },
+      { key: "work", label: "work", icon: <Briefcase size={14} />, series: mins("deep_work"), fmt: hm, unit: "", target: 240 },
       { key: "sleep", label: "sleep", icon: <Moon size={14} />, series: sleep, fmt: hm, unit: "", target: 420 },
-      { key: "water", label: "water", icon: <Droplets size={14} />, series: logged(waterBy), fmt: (n) => (n / 1000).toFixed(1), unit: "L", target: 2500 },
-      { key: "protein", label: "protein", icon: <Drumstick size={14} />, series: logged(proteinBy), fmt: (n) => String(Math.round(n)), unit: "g", target: 80 },
+      { key: "read", label: "read", icon: <BookOpen size={14} />, series: mins("read"), fmt: (n) => String(Math.round(n)), unit: "min", target: 30 },
     ];
   }, [data]);
 
-  // personal bests come from everything loaded, not just this week
-  const bests = useMemo(() => {
-    const before = (data.health_log ?? []).filter((r) => r.date < todayKey());
-    return {
-      speed: Math.max(0, ...before.map((r) => r.running_speed ?? 0)),
-      distance: Math.max(0, ...before.map((r) => r.walk_run_distance ?? 0)),
-    } as Record<string, number>;
-  }, [data]);
-
   return (
-    <section ref={ref} aria-label="Today's numbers" className="vitals-strip relative mb-8 grid grid-cols-2 gap-px overflow-visible rounded-2xl sm:grid-cols-4 lg:grid-cols-8">
+    <section ref={ref} aria-label="Today's numbers" className="vitals-strip relative mb-8 grid grid-cols-2 gap-px overflow-visible rounded-2xl sm:grid-cols-3 lg:grid-cols-6">
       {metrics.map((m, i) => {
         const now = m.series[m.series.length - 1];
         const live = now != null && now > 0;
-        const hit = live && ((m.target != null && now! >= m.target) || (m.best && bests[m.key] > 0 && now! > bests[m.key]));
+        const hit = live && m.target != null && now! >= m.target;
         return (
           <div key={m.key} className="relative">
             <button onClick={() => setOpen((o) => (o === m.key ? null : m.key))} aria-expanded={open === m.key}

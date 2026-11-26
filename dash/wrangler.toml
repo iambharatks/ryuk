@@ -26,8 +26,7 @@ binding = "BOT"
 service = "ryuk"
 entrypoint = "RyukRPC"
 
-# R2 bucket for shelf uploads — enable R2 in Cloudflare dashboard first, then:
-#   npx wrangler r2 bucket create ryuk-files
-# [[r2_buckets]]
-# binding = "FILES"
-# bucket_name = "ryuk-files"
+# R2 bucket for shelf uploads and pinned images
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "apples"

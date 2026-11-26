@@ -40,7 +40,7 @@ export function Paper({
   );
 }
 
-/** Handwriting — Nothing You Could Do font with ink filter on dark paper. */
+/** Handwriting — Mansalva font with ink filter on dark paper. */
 export function Handwriting({ children, className = "", as: As = "span", size = "md" }: {
   children: ReactNode; className?: string; as?: any; size?: "sm" | "md" | "lg" | "xl";
 }) {

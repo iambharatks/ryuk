@@ -133,5 +133,5 @@ you to sign in mid-workout.
   an intention; ticking it logs it at that moment. Tap any line to fix its words or time, or erase it. ← → or swipe turns pages.
 - **Shelf**: books and PDFs with a bookmark page, videos/audio with a timestamp (uploaded ones save their position while
   playing), images and links. Moving forward is also logged as reading/watching time.
-- Uploads need R2: enable R2 in the Cloudflare dashboard, then `npx wrangler r2 bucket create ryuk-files` before `npm run deploy:dash`.
+- Uploads need R2: enable R2 in the Cloudflare dashboard, create a bucket (`npx wrangler r2 bucket create apples`) and set its name as `bucket_name` under `[[r2_buckets]]` (binding `FILES`) in `dash/wrangler.toml` before `npm run deploy:dash`.
 - Handoff prompts for Claude Code: `docs/PROMPT-1-handoff.md`, `docs/PROMPT-2-parser-eval.md`, `docs/PROMPT-3-security-scale.md`.

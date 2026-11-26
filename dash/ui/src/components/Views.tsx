@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, Search, Trash2 } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import { Data, Ev, allEvents, byDay, avgByDay, dayKey, lastDays, prettyDay, seriesOf } from "../data";
 import { ACCENT, Card, CardHead, Legend, Lines, SERIES, StackedBars, fmt } from "./ui";
 import { EventRow } from "./gaze/ChronicleCard";
-import { Scramble, ShinigamiEye, Watcher } from "./Lore";
+import { Scramble, ShinigamiEye } from "./Lore";
 
 /* ================= Chronicle: the full timeline ================= */
 const FILTERS: [string, (e: Ev) => boolean][] = [
@@ -224,52 +224,6 @@ export function TelemetryView({ data, days, setDays, onOpenEyes }: { data: Data;
         <Card className="p-6"><CardHead eyebrow="Minutes per day · passive screen in red" title="Consumption" />
           <div className="mt-4"><StackedBars days={d} unit="min" series={kinds.map(([k, c]) => ({ name: k, color: c, values: seriesOf(byDay(data.time_log.filter((r) => r.kind === k), (r) => r.duration_min), d) }))} /></div>
           <div className="mt-3"><Legend items={kinds.map(([k, c]) => ({ name: k, color: c }))} /></div></Card>
-      </div>
-    </div>
-  );
-}
-
-/* ================= Quick capture (⌘K) ================= */
-export function CaptureModal({ open, onClose, onSubmit, onInscribed }: { open: boolean; onClose: () => void; onSubmit: (t: string) => Promise<string>; onInscribed?: () => void }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [reply, setReply] = useState<string | null>(null);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { if (open) { setReply(null); setTimeout(() => ref.current?.focus(), 30); } }, [open]);
-  if (!open) return null;
-  const go = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    try { const r = await onSubmit(text.trim()); setReply(r); setText(""); if (!r.startsWith("⚠")) onInscribed?.(); } catch (e) { setReply("⚠ " + (e as Error).message); }
-    setBusy(false);
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-[14vh] backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="relative w-full max-w-xl rounded-[20px] border border-hairline bg-surface shadow-2xl" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Write in the notebook">
-        <Watcher size={64} className="pointer-events-none absolute -top-[74px] right-6" />
-        <div className="flex items-center justify-between border-b border-hairline px-5 py-3">
-          <span className="eyebrow">Write in the notebook</span>
-          <span className="font-mono text-[10px] text-slate-dim">{new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" })} · esc to close</span>
-        </div>
-        <textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} rows={4}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } if (e.key === "Escape") onClose(); }}
-          placeholder="ran 5km in 30 min, lunch dal chawal 2 roti, energy 4…"
-          className="ruled block w-full resize-none bg-transparent py-1 pl-[68px] pr-5 font-serif text-[22px] italic text-ink caret-apple outline-none placeholder:not-italic placeholder:text-slate-dim" />
-        <div className="flex items-center justify-between border-t border-hairline px-5 py-3">
-          <span className="font-mono text-[10.5px] text-slate">Rule X: several deeds per line are each recorded</span>
-          <button onClick={go} disabled={busy || !text.trim()} className="btn !border-apple/50 disabled:opacity-40">
-            {busy ? "Inscribing…" : <>Inscribe <CornerDownLeft size={13} /></>}
-          </button>
-        </div>
-        {reply && (
-          <ul className="rounded-b-[20px] border-t border-hairline bg-canvas px-5 py-4 font-mono text-[12px] leading-relaxed text-ink">
-            {reply.split("\n").map((l, i) => (
-              <li key={i} className="ink-in" style={{ animationDelay: `${i * 220}ms` }}>
-                <span className={l.startsWith("✓") ? "inked" : ""} style={{ animationDelay: `${i * 220 + 200}ms` }}>{l}</span>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
     </div>
   );

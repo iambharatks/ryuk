@@ -109,6 +109,20 @@ ok("unticking removes the log", !r.body.task.done_at && q(`SELECT count(*) c FRO
 r = await call("DELETE", "/api/tasks", { id: task.id });
 ok("task deleted", r.body.ok && q("SELECT count(*) c FROM tasks")[0].c === 0);
 
+// open tasks carry forward; a kept one stays on the day it was kept and is gone the next
+const yday = new Date(Date.now() + 19800e3 - 86400e3).toISOString().slice(0, 10);
+const yAt = new Date(Date.parse(`${yday}T12:00:00+05:30`)).toISOString();
+const ins = sq.prepare(`INSERT INTO tasks (day, text, created_at, done_at, position) VALUES (?, ?, ?, ?, 1)`);
+ins.run(yday, "open from yesterday", yAt, null);
+ins.run(yday, "kept yesterday", yAt, yAt);
+r = await call("GET", `/api/page?day=${day}`);
+const names = (r.body.tasks ?? []).map((t) => t.text);
+ok("open task carries to the next day", names.includes("open from yesterday"), names);
+ok("kept task is gone the next day", !names.includes("kept yesterday"), names);
+r = await call("GET", `/api/page?day=${yday}`);
+ok("kept task stays on the day it was kept", (r.body.tasks ?? []).some((t) => t.text === "kept yesterday"), r.body.tasks);
+sq.prepare(`DELETE FROM tasks`).run();
+
 // ---- shelf ----
 r = await call("POST", "/api/library", { kind: "book", title: "Designing Data-Intensive Applications", creator: "Kleppmann", total: 590, progress: 120 });
 const book = r.body;

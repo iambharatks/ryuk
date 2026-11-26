@@ -58,7 +58,18 @@ function HandBox({ done }: { done: boolean }) {
 export function DeathPage({ store, onChanged, onApple }: { store: Store; onChanged?: () => void; onApple?: () => void }) {
   const today = istDay();
   const [day, setDay] = useState(today);
-  const [flip, setFlip] = useState<"" | "next" | "prev">("");
+  // page turn: a snapshot of the page being left rides on a leaf that turns on the spine
+  const [leaf, setLeaf] = useState<{ id: number; dir: "next" | "prev"; html: string } | null>(null);
+  const paperRef = useRef<HTMLElement>(null);
+  const turnTo = (next: string, dir: "next" | "prev") => {
+    if (next === day) return;
+    const id = Date.now();
+    if (paperRef.current) {
+      setLeaf({ id, dir, html: paperRef.current.outerHTML });
+      setTimeout(() => setLeaf((l) => (l?.id === id ? null : l)), 650);
+    }
+    setDay(next);
+  };
   const [page, setPage] = useState<PageData | null>(null);
   const [err, setErr] = useState("");
   const [drafts, setDrafts] = useState<Draft[]>(loadDrafts);
@@ -90,8 +101,7 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
     const next = shiftDay(day, n);
     if (next > today) return;
     setEditing(null); setReply(null);
-    setFlip(n > 0 ? "next" : "prev");
-    setDay(next);
+    turnTo(next, n > 0 ? "next" : "prev");
   };
 
   // lines on this page: ink (database) + pencil (drafts on this device), in time order
@@ -225,7 +235,7 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
   const onTouchEnd = (e: React.TouchEvent) => {
     const s = touch.current; touch.current = null; if (!s) return;
     const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
-    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.6) go(dx < 0 ? 1 : -1);
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.6) go(dx < 0 ? 1 : -1);
   };
 
   const rule = RULES[dayOfYear(day) % RULES.length];
@@ -262,8 +272,8 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
         <div className="flex items-center gap-1.5">
           <button className="btn !px-2.5" onClick={() => go(-1)} aria-label="Previous day"><ChevronLeft size={16} /></button>
           <button className="btn !px-2.5 disabled:opacity-30" onClick={() => go(1)} disabled={isToday} aria-label="Next day"><ChevronRight size={16} /></button>
-          {!isToday && <button className="btn" onClick={() => { setFlip("next"); setDay(today); }}>Today</button>}
-          <input type="date" aria-label="Go to day" value={day} max={today} onChange={(e) => e.target.value && e.target.value <= today && (setFlip(e.target.value > day ? "next" : "prev"), setDay(e.target.value))}
+          {!isToday && <button className="btn min-h-[44px] md:min-h-0" onClick={() => turnTo(today, "next")}>Today</button>}
+          <input type="date" aria-label="Go to day" value={day} max={today} onChange={(e) => e.target.value && e.target.value <= today && turnTo(e.target.value, e.target.value > day ? "next" : "prev")}
             className="hidden rounded-xl border border-hairline bg-surface px-2 py-1.5 font-mono text-[12px] text-slate [color-scheme:dark] sm:block" />
         </div>
         <label className="flex cursor-pointer items-center gap-2 font-mono text-[11px] text-slate" title="When on, each line turns to ink (is saved) as soon as you finish it">
@@ -272,9 +282,18 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
         </label>
       </div>
 
-      <div key={day} className={`dn-book ${flip ? `dn-flip-${flip}` : ""}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <div className="dn-turn" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      {leaf && <div className="dn-turn-shadow" aria-hidden="true" />}
+      {leaf && (
+        <div key={leaf.id} className={`dn-leaf ${leaf.dir}`} aria-hidden="true">
+          {/* our own rendered page, re-serialised: text was escaped by React when it was first rendered */}
+          <div className="dn-leaf-face" dangerouslySetInnerHTML={{ __html: leaf.html }} />
+          <div className="dn-leaf-back" />
+        </div>
+      )}
+      <div key={day} className="dn-book">
         <div className="dn-stack two" /><div className="dn-stack" />
-        <article className="dn-paper" aria-label={`Page for ${longDate(day)}`}>
+        <article ref={paperRef} className="dn-paper" aria-label={`Page for ${longDate(day)}`}>
           <div className="dn-holes" /><div className="dn-margin" />
           <Watcher size={54} className="pointer-events-none absolute -right-1 -top-1 opacity-90 [filter:drop-shadow(0_4px_6px_rgba(0,0,0,.35))]" />
 
@@ -362,6 +381,7 @@ export function DeathPage({ store, onChanged, onApple }: { store: Store; onChang
 
           <footer className="dn-rule"><span><span className="mr-2 font-mono text-[9.5px] uppercase tracking-[.2em] text-[rgba(120,30,22,.6)]">rule</span>{rule}</span></footer>
         </article>
+      </div>
       </div>
 
       {/* write in ink */}

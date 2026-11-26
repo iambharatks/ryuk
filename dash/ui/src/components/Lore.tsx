@@ -113,44 +113,6 @@ export function RuleOfTheNote() {
   );
 }
 
-/* Ryuk's notebook: an original black-leather journal with a crimson ribbon. Tilts toward the cursor; click to write. */
-export function NotebookCover({ pages, apples, onOpen }: { pages: number; apples: number; onOpen: () => void }) {
-  const [tilt, setTilt] = useState({ x: 0, y: 0 });
-  return (
-    <button onClick={onOpen} aria-label="Open the notebook and write"
-      onMouseMove={(e) => { const r = e.currentTarget.getBoundingClientRect(); setTilt({ x: ((e.clientY - r.top) / r.height - 0.5) * -14, y: ((e.clientX - r.left) / r.width - 0.5) * 18 }); }}
-      onMouseLeave={() => setTilt({ x: 0, y: 0 })}
-      className="notebook group relative h-[212px] w-[160px] shrink-0 [perspective:900px]">
-      <div className="relative h-full w-full transition-transform duration-300 ease-out [transform-style:preserve-3d]"
-        style={{ transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)` }}>
-        {/* page edges */}
-        <div className="absolute inset-y-[6px] -right-[5px] w-[8px] rounded-r-sm bg-[repeating-linear-gradient(180deg,#d9d6cf_0_1px,#a9a69e_1px_3px)] opacity-80" />
-        {/* cover */}
-        <div className="notebook-cover absolute inset-0 overflow-hidden rounded-r-[10px] rounded-l-[4px] border border-[#2A2A33] shadow-[0_24px_50px_-18px_rgba(0,0,0,.9)]">
-          <div className="absolute inset-y-0 left-0 w-[16px] bg-[#09090B] shadow-[inset_-1px_0_0_#24242C]">
-            <div className="absolute inset-y-3 left-[7px] border-l border-dashed border-[#2F2F38]" />
-          </div>
-          <div className="absolute inset-[10px] left-[24px] rounded-[6px] border border-[#2A2A33]" />
-          <div className="absolute inset-0 flex flex-col items-center justify-center pl-3">
-            <Emblem size={34} />
-            <p className="mt-3 font-frak text-[30px] tracking-[0.16em] text-ink/90">RYUK</p>
-            <p className="mt-1 font-mono text-[8.5px] uppercase tracking-[0.3em] text-slate">Vol. I · {new Date().getFullYear()}</p>
-          </div>
-          <div className="absolute inset-x-0 bottom-3 flex justify-center gap-3 pl-3 font-mono text-[9px] text-slate">
-            <span>{pages.toLocaleString()} entries</span>
-            <span className="flex items-center gap-1" title="One apple for each day this month with 8 or more entries"><MiniApple />{apples}</span>
-          </div>
-          {/* sheen */}
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,transparent_30%,rgba(255,255,255,.05)_45%,transparent_60%)] opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
-        </div>
-        {/* ribbon bookmark */}
-        <div className="ribbon absolute -bottom-[30px] left-[30px] h-[31px] w-[9px] origin-top bg-apple [clip-path:polygon(0_0,100%_0,100%_100%,50%_82%,0_100%)]" />
-      </div>
-      <span className="pointer-events-none absolute -bottom-12 left-[62%] -translate-x-1/2 whitespace-nowrap font-mono text-[9.5px] uppercase tracking-[0.2em] text-slate opacity-0 transition-opacity group-hover:opacity-100">open to write</span>
-    </button>
-  );
-}
-
 export function MiniApple({ size = 10 }: { size?: number }) {
   return (
     <svg width={size} height={size * 1.15} viewBox="0 0 34 40" aria-hidden="true">

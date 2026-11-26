@@ -15,17 +15,18 @@ export type TimeLog = Base & { kind: string; topic: S; duration_min: N; pages: N
 export type Checkin = Base & { metric: string; score: number };
 export type Note = Base & { note_kind: string; text: string };
 export type Message = { id: number; received_at: string; text: string; status: string; model: string | null };
-export type Pin = { id: number; created_at: string; kind: string; title: string; note: string | null; image_url: string | null };
+// note holds the quote for a text-only pin
+export type Pin = { id: number; created_at: string; kind: string; title: string; note: string | null; image_url: string | null; link?: string | null; position?: number | null };
+export type NewPin = { title: string; quote?: string; image_url?: string; link?: string };
 
-export type Txn = { id: number; txn_at: string; amount: number; direction: string; kind: string; channel: string | null; bank: string | null;
-  account_last4: string | null; card_last4: string | null; txn_ref: string | null; counterparty: string | null; counterparty_key: string | null;
-  vpa: string | null; purpose: string | null; category: string | null; flags: string | null; confidence: number; status: string; note: string | null };
-export type Rule = { id: number; match_key: string; display_name: string | null; category: string | null; kind: string | null; ignore: number; created_at: string };
-export type HealthDay = { id: number; date: string; steps: N; distance_km: N; flights: N; active_kcal: N; resting_kcal: N;
-  exercise_min: N; stand_hours: N; avg_hr: N; resting_hr: N; walking_hr: N; hrv_ms: N; vo2max: N; respiratory_rate: N;
-  spo2_pct: N; sleep_min: N; in_bed_min: N; weight_kg: N; body_fat_pct: N; mindful_min: N; source: S; updated_at: string };
+// finance_log: parsed bank SMS (the SMS text itself is never stored)
+export type FinanceRow = { id: number; date: string; time: S; type: "debit" | "credit" | "refund"; amount: number; account_last4: string;
+  merchant: S; balance: N; channel: S; raw_direction: S; date_in_sms: S; source: S; created_at: string };
+// health_log: one row per IST day from the Health Watcher Shortcut
+export type HealthRow = { id: number; date: string; steps: N; exercise_minutes: N; running_speed: N; walk_run_distance: N; heart_rate_avg: N;
+  sleep_minutes: N; weight_kg: N; active_cal: N; stand_minutes: N; running_power: N; running_stride_length: N; created_at: string };
 export type Data = {
-  transactions?: Txn[]; merchant_rules?: Rule[]; health_daily?: HealthDay[];
+  finance_log?: FinanceRow[]; health_log?: HealthRow[];
   strength: Strength[]; cardio: Cardio[]; meals: Meal[]; water: Water[]; sleep: Sleep[];
   time_log: TimeLog[]; checkins: Checkin[]; body: Body[]; notes: Note[]; messages: Message[]; pins: Pin[];
   daily_counts: { d: string; n: number }[];
@@ -85,11 +86,15 @@ export async function apiRow(method: "PATCH" | "DELETE", payload: object) {
   const res = await fetch("/api/row", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
   if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
 }
-export async function apiAddPin(pin: { kind: string; title: string; note?: string; image_url?: string }): Promise<Pin> {
+export async function apiAddPin(pin: NewPin): Promise<Pin> {
   const res = await fetch("/api/pins", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(pin) });
   const b = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(b.error || `HTTP ${res.status}`);
   return b;
+}
+export async function apiDeletePin(id: number): Promise<void> {
+  const res = await fetch(`/api/pins/${id}`, { method: "DELETE" });
+  if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
 }
 
 // ---------- Unified event stream ----------
@@ -244,26 +249,78 @@ export function observations(d: Data): { text: string; metric?: string }[] {
   return out;
 }
 
-export type MoodItem =
-  | { type: "pin"; pin: Pin }
-  | { type: "book"; title: string; kind: string; minutes: number; pages: number; last: string };
-export function moodboard(d: Data): MoodItem[] {
-  const media = new Map<string, { kind: string; minutes: number; pages: number; last: string }>();
-  for (const r of d.time_log) {
-    if (!["read", "watch", "listen"].includes(r.kind) || !r.title) continue;
-    const key = r.title.trim();
-    const m = media.get(key) ?? { kind: r.kind, minutes: 0, pages: 0, last: r.logged_at };
-    m.minutes += r.duration_min ?? 0; m.pages += r.pages ?? 0; if (r.logged_at > m.last) m.last = r.logged_at;
-    media.set(key, m);
+// ---------- Day counter: "Day N", streak, live tallies vs 7-day average ----------
+export type DayCounter = {
+  dayN: number;             // days since first entry (inclusive)
+  today: string;            // IST date "YYYY-MM-DD"
+  streak: number;           // consecutive IST days with >=1 entry up to today
+  daysWritten: number;      // days with at least one entry, ever
+  goalStreak: number;       // consecutive days all goals kept (placeholder until pacts/goals exist)
+  tallies: {
+    key: string;
+    label: string;
+    now: number;
+    avg7: number;           // mean of previous 7 days (today excluded)
+    unit: string;
+    fmt?: (n: number) => string;
+    hideWhenZero?: boolean;
+  }[];
+};
+export function dayCounter(d: Data): DayCounter {
+  const today = todayKey();
+  const todayMs = Date.parse(today + "T12:00:00Z");
+  // first day: earliest in daily_counts or first message
+  const firstDay = (d.daily_counts.length ? d.daily_counts[0].d : (d.messages[d.messages.length - 1]?.received_at && dayKey(d.messages[d.messages.length - 1].received_at))) || today;
+  const dayN = Math.max(1, Math.round((todayMs - Date.parse(firstDay + "T12:00:00Z")) / 86400e3) + 1);
+
+  // writing streak: walk back from today through daily_counts set
+  const written = new Set(d.daily_counts.filter((x) => x.n > 0).map((x) => x.d));
+  let streak = 0;
+  for (let i = 0; ; i++) {
+    const k = new Date(todayMs - i * 86400e3).toISOString().slice(0, 10);
+    if (written.has(k)) streak++;
+    else if (i === 0) { /* today not yet written: don't break the streak */ }
+    else break;
+    if (i > 400) break;
   }
-  const books: MoodItem[] = [...media].sort((a, b) => b[1].last.localeCompare(a[1].last)).slice(0, 6)
-    .map(([title, m]) => ({ type: "book", title, ...m }));
-  const pins: MoodItem[] = d.pins.map((p) => ({ type: "pin", pin: p }));
-  // interleave so photos/goals and covers mix like a moodboard
-  const out: MoodItem[] = [];
-  for (let i = 0; i < Math.max(pins.length, books.length); i++) { if (pins[i]) out.push(pins[i]); if (books[i]) out.push(books[i]); }
-  return out;
+
+  // build tallies for today vs previous 7-day average
+  const prev7 = Array.from({ length: 7 }, (_, i) => new Date(todayMs - (i + 1) * 86400e3).toISOString().slice(0, 10));
+  const avg = (m: Map<string, number>) => mean(prev7.map((k) => m.get(k) ?? 0).filter((v) => v != null) as number[]) ?? 0;
+
+  const entriesByDay = new Map(d.daily_counts.map((x) => [x.d, x.n]));
+  const setsByDay = byDay(d.strength, (r) => r.sets ?? 1);
+  const trainMinByDay = new Map(byDay(d.cardio, (r) => r.duration_min));
+  for (const [k, v] of byDay(d.strength, (r) => (r.sets ?? 1) * 3)) trainMinByDay.set(k, (trainMinByDay.get(k) || 0) + v);
+  const proteinByDay = byDay(d.meals, (r) => r.protein_g_est);
+  const waterByDay = byDay(d.water, (r) => r.ml);
+  const deepByDay = byDay(d.time_log.filter((r) => r.kind === "deep_work"), (r) => r.duration_min);
+  const screenByDay = byDay(d.time_log.filter((r) => r.kind === "screen"), (r) => r.duration_min);
+  const sleepByDay = byDay(d.sleep, (r) => r.duration_min);
+  // sleep is dated to the night it started, so "last night" is yesterday's sleep
+  const yesterday = prev7[0];
+  // finance_log dates are already IST days
+  const spendBy = new Map<string, number>();
+  for (const t of d.finance_log ?? []) if (t.type === "debit") spendBy.set(t.date, (spendBy.get(t.date) || 0) + (t.amount || 0));
+  const spend = spendBy.get(today) ?? 0;
+  const spendAvg = avg(spendBy);
+
+  const tallies: DayCounter["tallies"] = [
+    { key: "entries",  label: "Entries",  now: entriesByDay.get(today) ?? 0, avg7: avg(entriesByDay), unit: "" },
+    { key: "sets",     label: "Sets",     now: setsByDay.get(today) ?? 0,    avg7: avg(setsByDay),    unit: "", hideWhenZero: false },
+    { key: "train",    label: "Training", now: trainMinByDay.get(today) ?? 0, avg7: avg(trainMinByDay), unit: "min" },
+    { key: "protein",  label: "Protein",  now: proteinByDay.get(today) ?? 0, avg7: avg(proteinByDay), unit: "g" },
+    { key: "water",    label: "Water",    now: waterByDay.get(today) ?? 0,   avg7: avg(waterByDay),   unit: "ml" },
+    { key: "deep",     label: "Deep work", now: deepByDay.get(today) ?? 0,   avg7: avg(deepByDay),    unit: "min" },
+    { key: "sleep",    label: "Sleep",    now: sleepByDay.get(yesterday) ?? sleepByDay.get(today) ?? 0, avg7: avg(sleepByDay), unit: "min" },
+    { key: "screen",   label: "Screen",   now: screenByDay.get(today) ?? 0,  avg7: avg(screenByDay),  unit: "min" },
+  ];
+  if (d.finance_log) {
+    tallies.push({ key: "spend", label: "Spend", now: spend, avg7: spendAvg, unit: "₹", fmt: (n) => "₹" + Math.round(n).toLocaleString("en-IN") });
+  }
+  return { dayN, today, streak, daysWritten: written.size, goalStreak: 0, tallies };
 }
+
 
 // ---------- Demo data (used only when ?demo=1 or the API is unreachable) ----------
 export function demoData(): Data {
@@ -304,12 +361,24 @@ export function demoData(): Data {
   }
   D.notes.push({ id: id++, logged_at: at(0, 9, 5), note_kind: "idea", text: "An MCP server that lets Claude query this log", summary: "Idea: MCP server over the log" });
   D.notes.push({ id: id++, logged_at: at(2, 22, 30), note_kind: "note", text: "Felt sharpest after the early run; keep runs before 8.", summary: "Early runs help focus" });
+  // original abstract posters, drawn inline so the demo needs no network
+  const poster = (a: string, b: string, shape: string) => "data:image/svg+xml;utf8," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 520"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="400" height="520" fill="url(#g)"/>${shape}</svg>`);
   D.pins = [
-    { id: 1, created_at: at(3, 10), kind: "goal", title: "Ship an applied-AI portfolio project", note: "Public repo, write-up, demo video", image_url: null },
-    { id: 2, created_at: at(8, 10), kind: "inspiration", title: "Fewer things, done slowly and well", note: null, image_url: null },
-    { id: 3, created_at: at(12, 10), kind: "goal", title: "Run 10 km under 60 minutes", note: "Current best 5 km in 28:10", image_url: null },
-    { id: 4, created_at: at(20, 10), kind: "goal", title: "Sleep 7 h on 6 of 7 nights", note: null, image_url: null },
+    { id: 1, created_at: at(3, 10), kind: "media", title: "10 km under 60 minutes", note: null, link: null, position: 1,
+      image_url: poster("#2a1c1c", "#0d0a0f", `<circle cx="200" cy="190" r="110" fill="#C84B31" opacity=".85"/><path d="M0 400 Q120 330 220 380 T400 350 V520 H0Z" fill="#000" opacity=".55"/>`) },
+    { id: 2, created_at: at(8, 10), kind: "inspiration", title: "On the work", note: "Fewer things, done slowly and well.", image_url: null, link: null, position: 2 },
+    { id: 3, created_at: at(12, 10), kind: "media", title: "Ship the portfolio project", note: null, link: null, position: 3,
+      image_url: poster("#1b2230", "#0b0b0e", `<rect x="70" y="120" width="260" height="190" rx="10" fill="none" stroke="#ECE5D3" stroke-width="6" opacity=".8"/><path d="M110 260 L170 200 L220 240 L290 170" fill="none" stroke="#C84B31" stroke-width="10" stroke-linecap="round"/>`) },
+    { id: 4, created_at: at(20, 10), kind: "inspiration", title: "Rule", note: "Seven hours of sleep, six nights in seven.", image_url: null, link: null, position: 4 },
   ];
+  // Apple Health days, as the Health Watcher Shortcut would send them
+  D.health_log = lastDays(30).reverse().map((date, i) => ({
+    id: 100 + i, date, steps: Math.round(5200 + rnd() * 7400), exercise_minutes: Math.round(15 + rnd() * 55),
+    running_speed: i % 2 ? null : Math.round((9 + rnd() * 3) * 10) / 10, walk_run_distance: Math.round((2.5 + rnd() * 7) * 10) / 10,
+    heart_rate_avg: Math.round(64 + rnd() * 14), sleep_minutes: null, weight_kg: null, active_cal: Math.round(280 + rnd() * 420),
+    stand_minutes: null, running_power: null, running_stride_length: null, created_at: `${date} 21:00:00`,
+  }));
   D.messages = [
     { id: 1, received_at: at(0, 8, 41), text: "breakfast 2 besan chilla aur dahi", status: "auto", model: "gemini-3.5-flash-lite" },
     { id: 2, received_at: at(0, 7, 12), text: "bench 3x10 60 incline db 3x12 20", status: "auto", model: "gemini-3.5-flash-lite" },

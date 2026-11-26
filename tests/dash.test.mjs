@@ -19,6 +19,10 @@ const store = new Map();
 const FILES = {
   async put(key, body, opts) { const buf = new Uint8Array(await new Response(body).arrayBuffer()); store.set(key, { buf, meta: opts?.httpMetadata ?? {} }); return { size: buf.length }; },
   async delete(key) { store.delete(key); },
+  async list({ prefix = "" } = {}) {
+    const objects = [...store].filter(([k]) => k.startsWith(prefix)).map(([key, o]) => ({ key, size: o.buf.length }));
+    return { objects, truncated: false };
+  },
   async get(key, opts) {
     const o = store.get(key); if (!o) return null;
     const h = opts?.range; const rh = h?.get?.("range"); let range, data = o.buf;
@@ -48,6 +52,8 @@ globalThis.fetch = async (url, init) => {
     return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ events }) }] } }] }));
   }
   if (url.includes("api.telegram.org")) return new Response("{}");
+  if (url === "https://img.test/poster.png") return new Response(new Uint8Array([137, 80, 78, 71, 1, 2, 3]), { headers: { "content-type": "image/png" } });
+  if (url === "https://img.test/page.html") return new Response("<script>", { headers: { "content-type": "text/html" } });
   throw new Error("unexpected fetch " + url);
 };
 
@@ -145,6 +151,86 @@ r = await call("DELETE", "/api/library", { id: p.id });
 ok("deleting an item deletes its file", r.body.ok && !store.has(key));
 r = await call("PATCH", "/api/row", { table: "pins", id: 1, field: "image_url", value: "/api/file/files/00000000-0000-0000-0000-000000000000/a.png" });
 ok("pins accept uploaded images", r.status === 200, r.body);
+
+// ---- goals board ----
+const today = new Date(Date.now() + 19800e3).toISOString().slice(0, 10);
+r = await call("POST", "/api/goals", { text: "  Deadlift   100x5 " });
+const g1 = r.body;
+ok("goal added for today", r.status === 200 && g1.date === today && g1.text === "Deadlift 100x5" && g1.done === 0, r.body);
+ok("goal gets a sticky colour and a tilt within ±3°", /^#[0-9a-f]{6}$/.test(g1.color) && Math.abs(g1.rotation) <= 3, g1);
+r = await call("POST", "/api/goals", { text: "Read 20 pages" });
+ok("second goal has the next colour and position", r.body.color !== g1.color && r.body.position === g1.position + 1, r.body);
+r = await call("POST", "/api/goals", { text: "" });
+ok("empty goal refused", r.status === 400);
+r = await call("POST", "/api/goals", { text: "x", date: "not-a-day" });
+ok("bad date refused", r.status === 400);
+r = await call("POST", "/api/goals", { text: "Old one", date: "2026-01-02" });
+r = await call("GET", "/api/goals");
+ok("today's board only (no carry-over)", r.body.date === today && r.body.goals.length === 2 && r.body.goals.every((g) => g.date === today), r.body);
+r = await call("GET", "/api/goals?date=2026-01-02");
+ok("another day's board by date", r.body.goals.length === 1 && r.body.goals[0].text === "Old one", r.body);
+r = await call("PATCH", `/api/goals/${g1.id}`, { done: true });
+ok("goal ticked", r.body.done === 1, r.body);
+r = await call("PATCH", `/api/goals/${g1.id}`, { done: false, text: "Deadlift 105x5" });
+ok("goal unticked and reworded", r.body.done === 0 && r.body.text === "Deadlift 105x5", r.body);
+r = await call("PATCH", `/api/goals/${g1.id}`, {});
+ok("empty patch refused", r.status === 400);
+r = await call("PATCH", "/api/goals/999999", { done: true });
+ok("missing goal -> 404", r.status === 404);
+r = await call("DELETE", `/api/goals/${g1.id}`);
+ok("goal removed", r.body.ok && !q(`SELECT 1 FROM daily_goals WHERE id = ${g1.id}`).length);
+for (let i = 0; i < 11; i++) await call("POST", "/api/goals", { text: `filler ${i}` });
+r = await call("POST", "/api/goals", { text: "one too many" });
+ok("board holds 12 a day", r.status === 400 && q(`SELECT COUNT(*) AS n FROM daily_goals WHERE date = '${today}'`)[0].n === 12, r.body);
+r = await call("GET", "/api/goals", undefined, {}, "");
+ok("goals need Access", r.status === 403);
+
+// ---- pin wall ----
+r = await call("POST", "/api/pins", { title: "On the work", quote: "Fewer things, done slowly and well." });
+const qp = r.body;
+ok("quote pin stored in note", r.status === 200 && qp.note === "Fewer things, done slowly and well." && qp.image_url === null && qp.kind === "inspiration", r.body);
+r = await call("POST", "/api/pins", { title: "10k under 60", image_url: "https://img.test/poster.png", link: "https://example.com/plan" });
+const ip = r.body;
+const ipKey = ip.image_url?.slice("/api/file/".length);
+ok("linked image copied into R2", /^\/api\/file\/files\/[a-f0-9-]{36}\/poster\.png$/.test(ip.image_url) && store.has(ipKey) && ip.link === "https://example.com/plan", ip);
+ok("pins are ordered", ip.position === qp.position + 1, ip);
+r = await call("POST", "/api/pins", { title: "Not an image", image_url: "https://img.test/page.html" });
+ok("non-image link kept as a link, not stored", r.body.image_url === "https://img.test/page.html", r.body);
+r = await call("POST", "/api/pins", { title: "bad", image_url: "javascript:alert(1)" });
+ok("non-https image refused", r.status === 400);
+r = await call("POST", "/api/pins", { title: "bad", link: "http://x.test" });
+ok("non-https link refused", r.status === 400);
+r = await call("POST", "/api/pins", { quote: "no title" });
+ok("pin needs a title", r.status === 400);
+r = await call("GET", "/api/pins");
+ok("pins listed in wall order", r.body.pins.length >= 3 && r.body.pins.findIndex((x) => x.id === qp.id) < r.body.pins.findIndex((x) => x.id === ip.id), r.body);
+r = await call("PATCH", `/api/pins/${ip.id}`, { position: 0 });
+ok("pin moved", r.body.position === 0);
+r = await call("GET", "/api/pins");
+ok("moved pin comes first", r.body.pins[0].id === ip.id, r.body.pins.map((x) => x.id));
+r = await call("DELETE", `/api/pins/${ip.id}`);
+ok("unpinning deletes its copied image", r.body.ok && !store.has(ipKey) && !q(`SELECT 1 FROM pins WHERE id = ${ip.id}`).length);
+r = await call("DELETE", `/api/pins/${qp.id}`, undefined, {}, "");
+ok("pins need Access", r.status === 403);
+
+// ---- health and finance reads ----
+sq.exec(`INSERT INTO health_log (date, steps, raw_json) VALUES ('${today}', 8420, '{"steps":"8420"}'), ('2020-01-01', 1, '{}')`);
+sq.exec(`INSERT INTO finance_log (date, time, type, amount, account_last4, merchant, sms_hash) VALUES ('${today}', '10:00', 'debit', 500, '1234', 'SWIGGY', 'h1')`);
+r = await call("GET", "/api/health?range=7d");
+ok("/api/health returns the range", r.body.range === "7d" && r.body.rows.length === 1 && r.body.rows[0].steps === 8420, r.body);
+ok("/api/health never returns the raw payload", !("raw_json" in r.body.rows[0]));
+r = await call("GET", "/api/finance?range=30d");
+ok("/api/finance returns parsed rows", r.body.rows.length === 1 && r.body.rows[0].merchant === "SWIGGY", r.body);
+ok("/api/finance never returns the SMS hash", !("sms_hash" in r.body.rows[0]));
+r = await call("GET", "/api/finance?range=nonsense");
+ok("bad range falls back to the default", r.body.range === "30d", r.body);
+r = await call("GET", "/api/finance", undefined, {}, "");
+ok("finance needs Access", r.status === 403);
+r = await call("PATCH", "/api/row", { table: "finance_log", id: 1, field: "amount", value: 1 });
+ok("amounts can't be edited", r.status === 400);
+r = await call("PATCH", "/api/row", { table: "finance_log", id: 1, field: "type", value: "bogus" });
+ok("finance type must be debit/credit/refund", r.status === 400);
+
 const noFiles = { ...env, FILES: undefined };
 const r2 = await dash.fetch(new Request("https://dash.test/api/upload", { method: "POST", headers: { "Cf-Access-Jwt-Assertion": good, "content-type": "image/png" }, body: "x" }), noFiles);
 ok("no bucket -> clear 501", r2.status === 501);

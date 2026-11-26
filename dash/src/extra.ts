@@ -230,15 +230,17 @@ async function trackOps(db: D1Database, classA: number, classB: number) {
   ).bind(m, classA, classB).run();
 }
 
-export async function upload(req: Request, env: ExtraEnv) {
-  if (!env.FILES) return json({ error: "Uploads need the R2 bucket. See README: Shelf uploads." }, 501);
-  const type = (req.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-  if (!ALLOWED_MIME.test(type)) return json({ error: `file type not allowed: ${type || "unknown"}` }, 415);
-  const size = Number(req.headers.get("content-length") || 0);
-  if (size > MAX_UPLOAD) return json({ error: "file is over 95 MB" }, 413);
+export type Saved = { ok: true; key: string; size: number; mime: string } | { ok: false; error: string; status: number };
+
+/** Store one file in R2 under files/<uuid>/<name>, inside the storage quota and the monthly R2 operation limits. */
+export async function saveFile(env: ExtraEnv, body: ReadableStream | ArrayBuffer | null, size: number, type: string, rawName: string, maxSize = MAX_UPLOAD): Promise<Saved> {
+  if (!env.FILES) return { ok: false, error: "Uploads need the R2 bucket. See README: Shelf uploads.", status: 501 };
+  if (!ALLOWED_MIME.test(type)) return { ok: false, error: `file type not allowed: ${type || "unknown"}`, status: 415 };
+  const tooBig = `file is over ${Math.round(maxSize / 1024 / 1024)} MB`;
+  if (size > maxSize) return { ok: false, error: tooBig, status: 413 };
   // estimate Class A ops: ~1 list page per 1000 files + 1 put
   const opsErr = await checkOps(env.DB, 3, 0);
-  if (opsErr) return json({ error: opsErr }, 429);
+  if (opsErr) return { ok: false, error: opsErr, status: 429 };
   let used = 0, listPages = 0;
   let cursor: string | undefined;
   do {
@@ -247,14 +249,21 @@ export async function upload(req: Request, env: ExtraEnv) {
     cursor = list.truncated ? list.cursor : undefined;
     listPages++;
   } while (cursor);
-  if (used + size > STORAGE_QUOTA) return json({ error: `Storage quota reached (${(used / 1e9).toFixed(1)} / 7.0 GB). Delete files to free space.` }, 507);
-  const raw = decodeURIComponent(req.headers.get("x-file-name") || "file");
-  const name = raw.normalize("NFKD").replace(/[^\w.\-]+/g, "_").replace(/^[._]+/, "").slice(-100) || "file";
+  if (used + size > STORAGE_QUOTA) return { ok: false, error: `Storage quota reached (${(used / 1e9).toFixed(1)} / 7.0 GB). Delete files to free space.`, status: 507 };
+  const name = rawName.normalize("NFKD").replace(/[^\w.\-]+/g, "_").replace(/^[._]+/, "").slice(-100) || "file";
   const key = `files/${crypto.randomUUID()}/${name}`;
-  const obj = await env.FILES.put(key, req.body, { httpMetadata: { contentType: type, contentDisposition: "inline" } });
-  if (obj.size > MAX_UPLOAD) { await env.FILES.delete(key); await trackOps(env.DB, listPages + 2, 0); return json({ error: "file is over 95 MB" }, 413); }
+  const obj = await env.FILES.put(key, body, { httpMetadata: { contentType: type, contentDisposition: "inline" } });
+  if (obj.size > maxSize) { await env.FILES.delete(key); await trackOps(env.DB, listPages + 2, 0); return { ok: false, error: tooBig, status: 413 }; }
   await trackOps(env.DB, listPages + 1, 0);
-  return json({ key, size: obj.size, mime: type, url: `/api/file/${key}` });
+  return { ok: true, key, size: obj.size, mime: type };
+}
+
+export async function upload(req: Request, env: ExtraEnv) {
+  const type = (req.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const size = Number(req.headers.get("content-length") || 0);
+  const s = await saveFile(env, req.body, size, type, decodeURIComponent(req.headers.get("x-file-name") || "file"));
+  if (!s.ok) return json({ error: s.error }, s.status);
+  return json({ key: s.key, size: s.size, mime: s.mime, url: `/api/file/${s.key}` });
 }
 
 export async function serveFile(req: Request, env: ExtraEnv, key: string) {

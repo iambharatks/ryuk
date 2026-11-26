@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, Search, Trash2 } from "lucide-react";
 import { Data, Ev, allEvents, byDay, avgByDay, dayKey, lastDays, prettyDay, seriesOf } from "../data";
 import { ACCENT, Card, CardHead, Legend, Lines, SERIES, StackedBars, fmt } from "./ui";
-import { EventRow } from "./Overview";
+import { EventRow } from "./gaze/ChronicleCard";
 import { Scramble, ShinigamiEye, Watcher } from "./Lore";
 
 /* ================= Chronicle: the full timeline ================= */
@@ -58,13 +58,12 @@ const TABS: { table: keyof Data; label: string; cols: string[]; editable?: strin
   { table: "meals", label: "Meals", cols: ["logged_at", "meal_slot", "items", "source", "calories_est", "protein_g_est", "carbs_g_est", "fat_g_est", "detail"] },
   { table: "sleep", label: "Sleep", cols: ["logged_at", "duration_min", "bed_time", "wake_time", "quality", "awakenings", "is_nap", "detail"] },
   { table: "time_log", label: "Time", cols: ["logged_at", "kind", "topic", "duration_min", "pages", "title", "focus_quality", "output", "detail"] },
-  { table: "health_daily", label: "Health", cols: ["date", "steps", "distance_km", "active_kcal", "exercise_min", "resting_hr", "hrv_ms", "vo2max", "sleep_min", "weight_kg", "spo2_pct", "updated_at"], editable: [] },
+  { table: "health_log", label: "Health", cols: ["date", "steps", "exercise_minutes", "running_speed", "walk_run_distance", "heart_rate_avg", "sleep_minutes", "weight_kg", "active_cal", "stand_minutes", "running_power", "running_stride_length"], editable: [] },
   { table: "body", label: "Body", cols: ["logged_at", "weight_kg", "body_fat_pct", "waist_cm", "resting_hr", "detail"] },
   { table: "water", label: "Water", cols: ["logged_at", "ml"] },
   { table: "checkins", label: "Check-ins", cols: ["logged_at", "metric", "score"] },
   { table: "notes", label: "Notes", cols: ["logged_at", "note_kind", "text"] },
-  { table: "transactions", label: "Money", cols: ["txn_at", "amount", "direction", "counterparty", "category", "kind", "channel", "txn_ref", "purpose", "flags", "status", "note"], editable: ["counterparty", "category", "kind", "purpose", "status", "note"] },
-  { table: "merchant_rules", label: "Rules", cols: ["match_key", "display_name", "category", "kind", "ignore"], editable: ["display_name", "category", "kind", "ignore"] },
+  { table: "finance_log", label: "Money", cols: ["date", "time", "type", "amount", "merchant", "channel", "account_last4", "balance", "date_in_sms"], editable: ["merchant", "type", "channel"] },
   { table: "pins", label: "Pins", cols: ["created_at", "kind", "title", "note", "image_url"] },
   { table: "messages", label: "Messages", cols: ["received_at", "text", "status", "model"], editable: ["status"] },
 ];
@@ -72,14 +71,18 @@ const NUMERIC = new Set(["amount", "confidence", "ignore", "sets", "reps", "weig
   "distance_km", "avg_pace_sec_km", "avg_speed_kmh", "cadence_spm", "avg_hr", "max_hr", "elevation_gain_m", "calories", "steps",
   "calories_est", "protein_g_est", "carbs_g_est", "fat_g_est", "fiber_g_est", "ml", "quality", "awakenings", "is_nap", "pages",
   "focus_quality", "score", "body_fat_pct", "waist_cm", "resting_hr", "flights", "active_kcal", "resting_kcal",
-  "exercise_min", "stand_hours", "walking_hr", "hrv_ms", "vo2max", "respiratory_rate", "spo2_pct", "sleep_min", "in_bed_min", "mindful_min"]);
+  "balance", "exercise_minutes", "running_speed", "walk_run_distance", "heart_rate_avg", "sleep_minutes", "active_cal", "stand_minutes",
+  "running_power", "running_stride_length"]);
 // Pace is stored as seconds per km; shown and edited as m:ss.
 const paceToSec = (v: string) => { const m = v.trim().match(/^(\d+):(\d{1,2})$/); return m ? String(+m[1] * 60 + +m[2]) : v; };
 const fmtPace = (v: unknown) => (typeof v === "number" && v > 0 ? `${Math.floor(v / 60)}:${String(Math.round(v % 60)).padStart(2, "0")}` : v ?? "");
 const LABEL: Record<string, string> = { avg_pace_sec_km: "pace /km", cadence_spm: "cadence", elevation_gain_m: "elev m",
   calories_est: "kcal est", protein_g_est: "protein g", carbs_g_est: "carbs g", fat_g_est: "fat g", fiber_g_est: "fiber g",
-  focus_quality: "focus", hrv_ms: "hrv ms", spo2_pct: "spo2 %", active_kcal: "active kcal", exercise_min: "exercise min", volume_kg: "volume kg", set_detail: "sets detail", body_fat_pct: "body fat %" };
-const DATE_COLS = new Set(["logged_at", "created_at", "received_at", "txn_at", "updated_at"]);
+  focus_quality: "focus", volume_kg: "volume kg", set_detail: "sets detail", body_fat_pct: "body fat %",
+  exercise_minutes: "exercise min", running_speed: "run speed", walk_run_distance: "walk/run km", heart_rate_avg: "avg hr",
+  sleep_minutes: "sleep min", active_cal: "active kcal", stand_minutes: "stand min", running_power: "run power", running_stride_length: "stride m",
+  account_last4: "a/c", date_in_sms: "sms date" };
+const DATE_COLS = new Set(["logged_at", "created_at", "received_at"]);
 const fmtDate = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 
 export function VaultView({ data, onEdit, onDelete }: {

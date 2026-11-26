@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Command, PenLine, RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
-import { Data, apiAddPin, apiCapture, apiRow, demoData, fetchData } from "./data";
+import { Data, NewPin, Pin, apiAddPin, apiCapture, apiDeletePin, apiRow, demoData, fetchData } from "./data";
 import { DeathPage } from "./components/DeathPage";
 import { Shelf } from "./components/Shelf";
 import { apiStore, demoStore, type Store } from "./store";
@@ -9,7 +9,7 @@ import { Emblem, LiveDot } from "./components/ui";
 import { Overview } from "./components/Overview";
 import { CaptureModal, ChronicleView, TelemetryView, VaultView } from "./components/Views";
 import { OWNER } from "./config";
-import { AppleDrop, Ash, NotebookCover, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } from "./components/Lore";
+import { AppleDrop, Ash, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } from "./components/Lore";
 import { lastDays } from "./data";
 
 const VIEWS = ["Gaze", "Page", "Shelf", "Notebook", "Ledger", "Eyes"] as const;
@@ -29,6 +29,11 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [apple, setApple] = useState(0);
   const [eyesOpen, setEyesOpen] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const openNotebook = () => {
+    setOpening(true);
+    setTimeout(() => { setView("Page"); setOpening(false); }, 1100);
+  };
 
   const [demoS] = useState<Store | null>(() => (DEMO ? demoStore() : null));
   const uploads = !!(data as any)?.uploads;
@@ -58,9 +63,16 @@ export default function App() {
     if (DEMO) return "✓ (demo) inscribed:\n" + text;
     const reply = await apiCapture(text); load(); return reply;
   };
-  const onAddPin = async (p: { kind: string; title: string; note?: string; image_url?: string }) => {
-    if (DEMO) { setData((d) => d && { ...d, pins: [{ id: Date.now(), created_at: new Date().toISOString(), kind: p.kind, title: p.title, note: p.note || null, image_url: p.image_url || null }, ...d.pins] }); return; }
-    const pin = await apiAddPin(p); setData((d) => d && { ...d, pins: [pin, ...d.pins] }); flash("An omen is pinned");
+  const onAddPin = async (p: NewPin) => {
+    const pin: Pin = DEMO
+      ? { id: Date.now(), created_at: new Date().toISOString(), kind: p.image_url ? "media" : "inspiration", title: p.title, note: p.quote ?? null, image_url: p.image_url ?? null, link: p.link ?? null, position: null }
+      : await apiAddPin(p);
+    setData((d) => d && { ...d, pins: [...d.pins, pin] });
+    flash("Pinned to the wall");
+  };
+  const onDeletePin = async (id: number) => {
+    if (!DEMO) { try { await apiDeletePin(id); } catch (e) { return flash("Not unpinned: " + (e as Error).message); } }
+    setData((d) => d && { ...d, pins: d.pins.filter((p) => p.id !== id) });
   };
   const onEdit = async (table: string, id: number, field: string, value: string) => {
     if (!DEMO) { try { await apiRow("PATCH", { table, id, field, value }); } catch (e) { flash("Not saved: " + (e as Error).message); throw e; } }
@@ -94,8 +106,8 @@ export default function App() {
       {/* ---------- top bar ---------- */}
       <header className="sticky top-0 z-40 border-b border-hairline bg-surface/80 backdrop-blur-md">
         <div className="mx-auto grid max-w-[1400px] grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 md:px-8">
-          <a href="#gaze" onClick={() => setView("Gaze")} className="flex items-center gap-2.5">
-            <Emblem />
+          <a href="#gaze" onClick={() => setView("Gaze")} className="flex min-h-[44px] items-center gap-2.5">
+            <span className="emblem-pulse"><Emblem /></span>
             <span className="font-frak text-[30px] leading-none tracking-[0.06em] text-ink">RYUK</span>
           </a>
           <nav className="hidden justify-center md:flex" aria-label="Views">
@@ -121,7 +133,7 @@ export default function App() {
             <button onClick={load} aria-label="Refresh" className="hidden rounded-full p-2 text-slate transition hover:text-ink sm:block">
               <RefreshCw size={14} className={state === "loading" ? "animate-spin" : ""} />
             </button>
-            <span className="flex items-center gap-2 rounded-full border border-hairline bg-canvas/60 px-3 py-1.5 font-mono text-[10px] tracking-[0.14em] text-slate">
+            <span className="flex items-center gap-2 rounded-full border border-hairline bg-canvas/60 px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-[0.2em] text-slate">
               {state === "error" ? <span className="h-2 w-2 rounded-full bg-slate-dim" /> : <LiveDot />}
               <span className="hidden sm:inline">RYUK // OBSERVING •</span> {status}
             </span>
@@ -129,27 +141,23 @@ export default function App() {
         </div>
         <nav className="no-scrollbar flex gap-1 overflow-x-auto px-4 pb-2.5 md:hidden" aria-label="Views">
           {VIEWS.map((v) => (
-            <button key={v} onClick={() => setView(v)} className={`shrink-0 rounded-full px-3.5 py-1.5 text-[13px] ${view === v ? "bg-raised text-ink shadow-[inset_0_0_0_1px_#24242C]" : "text-slate"}`}>{VIEW_LABEL[v]}</button>
+            <button key={v} onClick={() => setView(v)} className={`min-h-[44px] shrink-0 rounded-full px-4 text-[13px] ${view === v ? "bg-raised text-ink shadow-[inset_0_0_0_1px_#24242C]" : "text-slate"}`}>{VIEW_LABEL[v]}</button>
           ))}
         </nav>
       </header>
 
       {/* ---------- page ---------- */}
-      <main className="relative z-10 mx-auto max-w-[1400px] px-4 pt-8 md:px-8">
-        <div className="mb-7 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+      <main className="relative z-10 mx-auto max-w-[1400px] px-4 pt-6 md:px-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="eyebrow">{greet}, {OWNER.name} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" })}</p>
-            <h1 key={view} className="ink-write mt-2 font-serif text-[40px] leading-[1.02] text-ink md:text-[56px]">
-              {view === "Gaze" ? <>Everything is <em className="text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : view === "Page" ? <>Write it <em className="text-slate">as it happens</em></> : view === "Shelf" ? <>The <em className="text-slate">shelf</em></> : <>Shinigami <em className="text-slate">eyes</em></>}
+            <h1 key={view} className="ink-write mt-1.5 font-serif text-[32px] leading-[1.02] text-ink md:text-[48px]">
+              {view === "Gaze" ? <>Everything is <em className="written-glow text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : view === "Page" ? <>Write it <em className="text-slate">as it happens</em></> : view === "Shelf" ? <>The <em className="text-slate">shelf</em></> : <>Shinigami <em className="text-slate">eyes</em></>}
             </h1>
           </div>
-          {view === "Gaze" && (
-            <div className="flex items-end gap-8">
-              <RuleOfTheNote />
-              <div className="hidden pb-7 sm:block"><NotebookCover pages={notebookStats.pages} apples={notebookStats.apples} onOpen={() => setCapture(true)} /></div>
-            </div>
-          )}
+          {view === "Gaze" && <div className="hidden xl:block"><RuleOfTheNote /></div>}
         </div>
+        <div className="ink-stroke" aria-hidden="true" />
         {state === "error" && !data && view !== "Page" && view !== "Shelf" && (
           <div className="card p-10 text-center">
             <Watcher size={80} className="mx-auto mb-4" /><p className="font-serif text-2xl text-ink">The notebook could not be reached.</p>
@@ -158,8 +166,8 @@ export default function App() {
           </div>
         )}
         {!data && state === "loading" && view !== "Page" && view !== "Shelf" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
-        <div key={view} className="page-turn">
-        {data && view === "Gaze" && <Overview data={data} onAddPin={onAddPin} onDeletePin={(id) => onDelete("pins", id)} demo={DEMO} />}
+        <div key={view} className="view-fade">
+        {data && view === "Gaze" && <Overview data={data} store={store} onAddPin={onAddPin} onDeletePin={onDeletePin} opening={opening} onOpenNotebook={openNotebook} notebookStats={notebookStats} demo={DEMO} />}
         {view === "Page" && <DeathPage store={store} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
         {view === "Shelf" && <Shelf store={store} onChanged={() => { if (!DEMO) load(); }} />}
         {data && view === "Notebook" && <ChronicleView data={data} />}

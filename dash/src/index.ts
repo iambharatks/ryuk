@@ -4,6 +4,7 @@
  * so the data stays private even if Access is ever switched off by mistake.
  */
 import PAGE from "./page.html";
+import { addGoal, addPin, deleteGoal, deletePin, editGoal, editPin, listGoals, listPins } from "./workspace";
 import { type BotRPC, addLibrary, addTask, deleteLibrary, deleteTask, editEntry, editLibrary, editTask, getPage, libraryProgress, serveFile, upload } from "./extra";
 
 export interface Env {
@@ -71,11 +72,10 @@ const EDITABLE: Record<string, string[]> = {
   notes:    ["logged_at", "note_kind", "text"],
   messages: ["status"],
   pins:     ["kind", "title", "note", "image_url"],
-  transactions: ["counterparty", "category", "kind", "purpose", "status", "note"],
-  merchant_rules: ["display_name", "category", "kind", "ignore"],
-  health_daily: [],   // read-only: comes from Apple Health
+  finance_log: ["merchant", "type", "channel"],   // amounts and accounts come only from the SMS
+  health_log: [],     // read-only: comes from Apple Health
 };
-const NUMERIC = new Set(["ignore", "sets", "reps", "weight_kg", "volume_kg", "rpe", "rest_sec", "duration_min", "distance_km",
+const NUMERIC = new Set(["sets", "reps", "weight_kg", "volume_kg", "rpe", "rest_sec", "duration_min", "distance_km",
   "avg_pace_sec_km", "avg_speed_kmh", "cadence_spm", "avg_hr", "max_hr", "elevation_gain_m", "calories", "steps",
   "calories_est", "protein_g_est", "carbs_g_est", "fat_g_est", "fiber_g_est", "ml", "quality", "awakenings", "is_nap",
   "pages", "focus_quality", "score", "body_fat_pct", "waist_cm", "resting_hr"]);
@@ -85,6 +85,27 @@ const EVENT_TABLES = ["strength", "cardio", "meals", "water", "sleep", "time_log
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
+// explicit columns: the SMS hash and the raw health payload never leave the database
+const FINANCE_COLS = "id, date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, created_at";
+const HEALTH_COLS = "id, date, steps, exercise_minutes, running_speed, walk_run_distance, heart_rate_avg, sleep_minutes, weight_kg, active_cal, stand_minutes, running_power, running_stride_length, created_at";
+const istDate = (iso: string) => new Date(Date.parse(iso) + 19800e3).toISOString().slice(0, 10);
+
+/** "7d", "30d", "12w", "3m" or a bare number of days -> days (1..3660). */
+function rangeDays(v: string | null, fallback: number): number {
+  const m = String(v ?? "").trim().match(/^(\d{1,4})\s*([dwm]?)$/i);
+  if (!m) return fallback;
+  const unit = m[2].toLowerCase();
+  const n = Number(m[1]) * (unit === "w" ? 7 : unit === "m" ? 30 : 1);
+  return Math.max(1, Math.min(3660, n));
+}
+async function rangeRows(env: Env, table: "finance_log" | "health_log", days: number) {
+  const from = istDate(new Date(Date.now() - (days - 1) * 86400e3).toISOString());
+  const cols = table === "finance_log" ? FINANCE_COLS : HEALTH_COLS;
+  const order = table === "finance_log" ? "date DESC, time DESC" : "date DESC";
+  const { results } = await env.DB.prepare(`SELECT ${cols} FROM ${table} WHERE date >= ? ORDER BY ${order} LIMIT 5000`).bind(from).all();
+  return { range: `${days}d`, from, rows: results };
+}
+
 async function getData(env: Env, days: number) {
   const since = new Date(Date.now() - days * 86400e3).toISOString();
   const out: Record<string, unknown[]> = {};
@@ -93,12 +114,10 @@ async function getData(env: Env, days: number) {
       ? env.DB.prepare(`SELECT id, received_at, text, status, model FROM messages WHERE received_at >= ? ORDER BY received_at DESC LIMIT 2000`).bind(since)
       : t === "pins"
         ? env.DB.prepare(`SELECT * FROM pins ORDER BY created_at DESC LIMIT 200`)
-      : t === "transactions"
-        ? env.DB.prepare(`SELECT * FROM transactions WHERE txn_at >= ? ORDER BY txn_at DESC LIMIT 5000`).bind(since)
-      : t === "merchant_rules"
-        ? env.DB.prepare(`SELECT * FROM merchant_rules ORDER BY created_at DESC LIMIT 1000`)
-      : t === "health_daily"
-        ? env.DB.prepare(`SELECT rowid AS id, * FROM health_daily WHERE date >= ? ORDER BY date DESC LIMIT 1000`).bind(since.slice(0, 10))
+      : t === "finance_log"
+        ? env.DB.prepare(`SELECT ${FINANCE_COLS} FROM finance_log WHERE date >= ? ORDER BY date DESC, time DESC LIMIT 5000`).bind(istDate(since))
+      : t === "health_log"
+        ? env.DB.prepare(`SELECT ${HEALTH_COLS} FROM health_log WHERE date >= ? ORDER BY date DESC LIMIT 1000`).bind(istDate(since))
         : env.DB.prepare(`SELECT * FROM ${t} WHERE logged_at >= ? ORDER BY logged_at DESC LIMIT 5000`).bind(since),
   );
   // 365-day activity counts per IST day, for the heatmap (one query per table; D1 limits UNIONs)
@@ -129,36 +148,14 @@ async function editRow(env: Env, body: any) {
   }
   if (field === "logged_at" && value !== null && Number.isNaN(Date.parse(value))) return json({ error: "bad date" }, 400);
   if (field === "image_url" && value !== null && !/^(https:\/\/[^\s"'<>]+|\/api\/file\/files\/[a-f0-9-]{36}\/[\w.\-]{1,120})$/i.test(String(value))) return json({ error: "image must be an https link or an upload" }, 400);
+  if (table === "finance_log" && field === "type" && !["debit", "credit", "refund"].includes(String(value))) return json({ error: "type must be debit, credit or refund" }, 400);
+  if (table === "finance_log" && field === "channel" && !["bank", "upi", "card", "auto_debit"].includes(String(value))) return json({ error: "channel must be bank, upi, card or auto_debit" }, 400);
   await env.DB.prepare(`UPDATE ${table} SET ${field} = ? WHERE id = ?`).bind(value, id).run();
-  if (table === "transactions" && ["counterparty", "category", "kind"].includes(field)) {
-    // Teach once: remember the correction for this merchant and apply it to its other, unconfirmed rows.
-    const row = await env.DB.prepare(`SELECT counterparty_key, vpa FROM transactions WHERE id = ?`).bind(id).first<{ counterparty_key: string | null; vpa: string | null }>();
-    const key = row?.counterparty_key || row?.vpa;
-    if (key) {
-      const col = field === "counterparty" ? "display_name" : field;
-      await env.DB.prepare(`INSERT INTO merchant_rules (match_key, ${col}, created_at) VALUES (?,?,?) ON CONFLICT(match_key) DO UPDATE SET ${col} = excluded.${col}`)
-        .bind(key, value, new Date().toISOString()).run();
-      await env.DB.prepare(`UPDATE transactions SET ${field} = ? WHERE counterparty_key = ? AND id != ? AND status != 'confirmed'`).bind(value, key, id).run();
-    }
-    await env.DB.prepare(`UPDATE transactions SET status = 'confirmed' WHERE id = ? AND status != 'ignored'`).bind(id).run();
-  }
-  if (table !== "messages" && table !== "pins" && table !== "transactions" && table !== "merchant_rules") {
+  if (EVENT_TABLES.includes(table)) {
     // mark the source message as corrected so you know which rows were fixed by hand
     await env.DB.prepare(`UPDATE messages SET status = 'corrected' WHERE id = (SELECT message_id FROM ${table} WHERE id = ?)`).bind(id).run();
   }
   return json({ ok: true });
-}
-
-async function addPin(env: Env, body: any) {
-  const kind = ["goal", "inspiration", "media"].includes(body?.kind) ? body.kind : "goal";
-  const title = String(body?.title ?? "").trim().slice(0, 200);
-  const note = body?.note ? String(body.note).trim().slice(0, 1000) : null;
-  let image = body?.image_url ? String(body.image_url).trim() : null;
-  if (!title) return json({ error: "title required" }, 400);
-  if (image && !/^https:\/\/[^\s"'<>]+$/i.test(image)) return json({ error: "image must be an https link" }, 400);
-  const row = await env.DB.prepare(`INSERT INTO pins (created_at, kind, title, note, image_url) VALUES (?,?,?,?,?) RETURNING *`)
-    .bind(new Date().toISOString(), kind, title, note, image).first();
-  return json(row);
 }
 
 async function capture(env: Env, body: any) {
@@ -191,8 +188,7 @@ async function deleteRow(env: Env, body: any) {
       env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(id),
     ]);
   } else {
-    const idCol = table === "health_daily" ? "rowid" : "id";
-    await env.DB.prepare(`DELETE FROM ${table} WHERE ${idCol} = ?`).bind(id).run();
+    await env.DB.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(id).run();
   }
   return json({ ok: true });
 }
@@ -217,9 +213,22 @@ export default {
       const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days")) || 30));
       return json(await getData(env, days));
     }
+    if (url.pathname === "/api/health" && req.method === "GET") return json(await rangeRows(env, "health_log", rangeDays(url.searchParams.get("range"), 7)));
+    if (url.pathname === "/api/finance" && req.method === "GET") return json(await rangeRows(env, "finance_log", rangeDays(url.searchParams.get("range"), 30)));
     if (url.pathname === "/api/row" && req.method === "PATCH") return editRow(env, await req.json());
     if (url.pathname === "/api/row" && req.method === "DELETE") return deleteRow(env, await req.json());
+    if (url.pathname === "/api/pins" && req.method === "GET") return listPins(env);
     if (url.pathname === "/api/pins" && req.method === "POST") return addPin(env, await req.json());
+    if (url.pathname === "/api/goals" && req.method === "GET") return listGoals(env, url.searchParams.get("date"));
+    if (url.pathname === "/api/goals" && req.method === "POST") return addGoal(env, await req.json());
+    const item = url.pathname.match(/^\/api\/(goals|pins)\/(\d{1,12})$/);
+    if (item) {
+      const id = Number(item[2]);
+      if (item[1] === "goals" && req.method === "PATCH") return editGoal(env, id, await req.json());
+      if (item[1] === "goals" && req.method === "DELETE") return deleteGoal(env, id);
+      if (item[1] === "pins" && req.method === "PATCH") return editPin(env, id, await req.json());
+      if (item[1] === "pins" && req.method === "DELETE") return deletePin(env, id);
+    }
     if (url.pathname === "/api/capture" && req.method === "POST") return capture(env, await req.json());
     if (url.pathname === "/api/notepad" && req.method === "POST") return notepad(env, await req.json());
     if (url.pathname === "/api/page" && req.method === "GET") return getPage(env, url.searchParams.get("day") ?? "");

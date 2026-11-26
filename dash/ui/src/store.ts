@@ -12,6 +12,7 @@ export type LibItem = {
   total: number | null; progress: number | null; status: "active" | "paused" | "done" | "wishlist"; note: string | null; created_at: string; updated_at: string;
 };
 export type Uploaded = { key: string; size: number; mime: string; url: string };
+export type Goal = { id: number; date: string; text: string; done: number; color: string | null; rotation: number | null; position: number | null; created_at: string };
 
 export interface Store {
   demo: boolean;
@@ -30,6 +31,10 @@ export interface Store {
   deleteItem(id: number): Promise<void>;
   upload(file: File, onProgress?: (pct: number) => void): Promise<Uploaded>;
   fileUrl(item: { file_key: string | null; url: string | null }): string | null;
+  goals(date?: string): Promise<Goal[]>;
+  addGoal(text: string, date?: string): Promise<Goal>;
+  editGoal(id: number, patch: { done?: boolean; text?: string; position?: number }): Promise<Goal>;
+  deleteGoal(id: number): Promise<void>;
 }
 
 export const istDay = (ms = Date.now()) => new Date(ms + 19800e3).toISOString().slice(0, 10);
@@ -69,8 +74,15 @@ export function apiStore(uploads: boolean): Store {
       x.send(file);
     }),
     fileUrl: (i) => (i.file_key ? `/api/file/${i.file_key.split("/").map(encodeURIComponent).join("/")}` : i.url),
+    goals: async (date) => (await call<{ goals: Goal[] }>("GET", `/api/goals${date ? `?date=${date}` : ""}`)).goals,
+    addGoal: (text, date) => call("POST", "/api/goals", { text, date }),
+    editGoal: (id, patch) => call("PATCH", `/api/goals/${id}`, patch),
+    deleteGoal: async (id) => { await call("DELETE", `/api/goals/${id}`); },
   };
 }
+
+const STICKY = ["#f5e6a3", "#f5c6c6", "#c6d8f5", "#c6f5d0"];
+const seedTilt = (s: string) => Math.round((([...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7) % 1000) / 1000 * 6 - 3) * 10) / 10;
 
 // ---------------- demo: everything in memory, same behaviour ----------------
 const guess = (text: string): Parsed[] => {
@@ -142,6 +154,9 @@ export function demoStore(): Store {
     { id: nextId++, kind: "book", title: "Atomic Habits", creator: "James Clear", url: null, file_key: null, mime: null, total: 320, progress: 320, status: "done", note: null, created_at: at(yday, "11:00"), updated_at: at(yday, "11:00") },
     { id: nextId++, kind: "link", title: "Cloudflare D1 docs", creator: "developers.cloudflare.com", url: "https://developers.cloudflare.com/d1/", file_key: null, mime: null, total: null, progress: null, status: "wishlist", note: null, created_at: at(yday, "12:00"), updated_at: at(yday, "12:00") },
   ];
+  const goals: Goal[] = ["Deadlift 100x5", "Finish DDIA ch 6", "3 L of water", "Call home", "Ship the pin wall"].map((text, i) => ({
+    id: nextId++, date: today, text, done: i === 2 ? 1 : 0, color: STICKY[i % 4], rotation: seedTilt(text + i), position: i + 1, created_at: new Date(now).toISOString(),
+  }));
   const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
   const wait = (ms = 350) => new Promise((r) => setTimeout(r, ms));
   const dayOf = (iso: string) => istDay(Date.parse(iso));
@@ -179,6 +194,22 @@ export function demoStore(): Store {
       return { key, size: file.size, mime: file.type, url };
     },
     fileUrl: (i) => (i.file_key ? demoFiles.get(i.file_key) ?? (i.file_key === "demo-pdf" ? pdfUrl : null) : i.url),
+    async goals(date = today) { await wait(150); return clone(goals.filter((g) => g.date === date).sort((a, b) => (a.position ?? 0) - (b.position ?? 0))); },
+    async addGoal(text, date = today) {
+      await wait(150);
+      const n = goals.filter((g) => g.date === date).length;
+      if (n >= 12) throw new Error("the board holds 12 a day");
+      const g: Goal = { id: nextId++, date, text: text.slice(0, 80), done: 0, color: STICKY[n % 4], rotation: seedTilt(text + n), position: n + 1, created_at: new Date().toISOString() };
+      goals.push(g); return clone(g);
+    },
+    async editGoal(id, patch) {
+      await wait(120); const g = goals.find((x) => x.id === id); if (!g) throw new Error("not found");
+      if (patch.done != null) g.done = patch.done ? 1 : 0;
+      if (patch.text != null) g.text = patch.text;
+      if (patch.position != null) g.position = patch.position;
+      return clone(g);
+    },
+    async deleteGoal(id) { await wait(120); const i = goals.findIndex((x) => x.id === id); if (i >= 0) goals.splice(i, 1); },
   };
 }
 const demoFiles = new Map<string, string>();

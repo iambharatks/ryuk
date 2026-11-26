@@ -4,7 +4,7 @@
  * Commands: /today  /undo  /retry
  */
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { handleIngest, json, keyOk } from "./ingest";
+import { authOk, handleFinance, json } from "./ingest";
 import { handleHealth } from "./health";
 import { type BatchLine, hhmm, isBatch, lineKey, parseBatch } from "./batch";
 
@@ -16,11 +16,11 @@ export interface Env {
   OWNER_CHAT_ID: string;           // var
   GEMINI_MODEL: string;            // var, primary model
   GEMINI_FALLBACK_MODEL?: string;  // var, used on 429 / 404 / 5xx / timeout
-  INGEST_KEY?: string;             // secret, for /ingest/sms (bank SMS Shortcut)
+  INGEST_KEY?: string;             // secret, for /ingest/finance (bank SMS Shortcut)
   HEALTH_KEY?: string;             // secret, for /ingest/health (Apple Health Shortcut)
   LOG_KEY?: string;                // secret, for /ingest/log (text logging Shortcut)
   LARGE_TXN_INR?: string;          // var, threshold for the "large" flag
-  FINANCE_ALERTS?: string;         // var, "1" = detail-free Telegram ping for flagged transactions
+  FINANCE_ALERTS?: string;         // var, "0" turns off the detail-free "finance entry logged" Telegram ping
 }
 
 // ---------- Event model (what Gemini returns) ----------
@@ -630,21 +630,28 @@ async function handleLive(env: Env, msg: any, text: string): Promise<boolean> {
   return true;
 }
 
-// POST /ingest/log — log free text from an iPhone Shortcut (same parsing as Telegram; reply shown as a notification).
-// Auth: X-Ryuk-Key = LOG_KEY. Body: {"text": "..."} or text/plain.
+// POST /ingest/log — log free text from an iPhone Shortcut, parsed by Gemini exactly like a Telegram message.
+// Auth: "Authorization: Bearer <LOG_KEY>" (X-Ryuk-Key also accepted). Body: {"text": "..."} or text/plain.
+// The reply also goes to your Telegram chat.
 async function handleLog(req: Request, env: Env): Promise<Response> {
   if (req.method !== "POST") return json({ error: "not found" }, 404);
   if (!env.LOG_KEY) return json({ error: "LOG_KEY not configured" }, 503);
-  if (!keyOk(req.headers.get("X-Ryuk-Key"), env.LOG_KEY)) return json({ error: "unauthorized" }, 401);
+  if (!authOk(req, env.LOG_KEY)) return json({ error: "unauthorized" }, 401);
   const raw = (await req.text()).slice(0, 4096);
   let text = raw;
   if ((req.headers.get("content-type") || "").includes("json")) {
-    try { text = String(JSON.parse(raw).text ?? ""); } catch { return json({ error: "invalid json" }, 400); }
+    try { text = String(JSON.parse(raw)?.text ?? ""); } catch { return json({ error: "invalid json" }, 400); }
   }
   text = text.trim().slice(0, 2000);
   if (!text) return json({ error: "empty text" }, 400);
   const reply = await logText(env, text, Date.now(), null);
-  return json({ status: "logged", reply });
+  // reply lines look like "✓ strength: Bench press 3x10 at 60kg"
+  const parsed = [...reply.matchAll(/^✓ (\w+): (.+)$/gm)];
+  const types = [...new Set(parsed.map((m) => m[1]))];
+  const category = types.length ? types.join(",") : null;
+  const summary = parsed.length ? parsed.map((m) => m[2]).join("; ") : reply;
+  if (env.OWNER_CHAT_ID) await send(env, env.OWNER_CHAT_ID, reply).catch(() => {});
+  return json({ ok: true, status: "logged", category, summary, reply });
 }
 
 // Private RPC entrypoint: only reachable through a Service Binding (the dashboard), never from the internet.
@@ -702,7 +709,9 @@ export default {
     const path = new URL(req.url).pathname;
     if (path === "/ingest/health") return handleHealth(req, env);
     if (path === "/ingest/log") return handleLog(req, env);
-    if (path.startsWith("/ingest/")) return handleIngest(req, env);
+    // every other /ingest path is a bank SMS: regex only, never Gemini
+    if (path === "/ingest" || path === "/ingest/finance" || path === "/ingest/sms") return handleFinance(req, env);
+    if (path.startsWith("/ingest")) return json({ error: "not found" }, 404);
     if (req.method !== "POST" || req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
       return new Response("ok");
     }

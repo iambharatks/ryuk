@@ -40,6 +40,7 @@ export function CardHead({ eyebrow, title, right }: { eyebrow: string; title: st
 export function LiveDot({ className = "" }: { className?: string }) {
   return (
     <span className={`relative inline-flex h-2 w-2 ${className}`}>
+      <span className="live-glow" aria-hidden="true" />
       <span className="absolute inset-0 rounded-full bg-apple animate-pulseDot" />
       <span className="absolute -inset-1 rounded-full bg-apple/20 animate-pulseDot" />
     </span>

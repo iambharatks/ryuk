@@ -171,88 +171,64 @@ CREATE TABLE IF NOT EXISTS pins (
   created_at  TEXT NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'goal',   -- goal | inspiration | media
   title       TEXT NOT NULL,
-  note        TEXT,
-  image_url   TEXT                           -- optional https image link
+  note        TEXT,                          -- the quote, for a text-only pin
+  image_url   TEXT,                          -- https link, or /api/file/... when copied into R2
+  link        TEXT,                          -- optional https link   (added to existing DBs by migrations/002)
+  position    INTEGER                        -- order on the pin wall  (added to existing DBs by migrations/002)
 );
 
--- ================= Finance (bank / card SMS) =================
--- Every SMS the iPhone forwards, REDACTED (long digit runs and links removed), with what the parser decided.
--- Kept so the parser can be improved and old messages re-parsed. OTPs and adverts are stored only as "ignored".
-CREATE TABLE IF NOT EXISTS sms_inbox (
-  id           INTEGER PRIMARY KEY,
-  received_at  TEXT NOT NULL,
-  text         TEXT NOT NULL,              -- redacted SMS body
-  text_hash    TEXT NOT NULL UNIQUE,       -- sha-256 of the original body: the same SMS twice is stored once
-  result       TEXT NOT NULL,              -- recorded | duplicate | ignored | unparsed
-  reason       TEXT                        -- why it was ignored / what was missing
+-- ================= Goals board: sticky notes for one IST day (never carried over) =================
+CREATE TABLE IF NOT EXISTS daily_goals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  date        TEXT NOT NULL,                 -- YYYY-MM-DD (IST)
+  text        TEXT NOT NULL,
+  done        INTEGER DEFAULT 0,             -- 0 or 1
+  color       TEXT,                          -- sticky-note colour
+  rotation    REAL,                          -- -3..3 degrees, fixed when the note is written
+  position    INTEGER,                       -- order on the board
+  created_at  TEXT DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_daily_goals_date ON daily_goals(date);
 
--- One row per real money movement.
-CREATE TABLE IF NOT EXISTS transactions (
-  id               INTEGER PRIMARY KEY,
-  sms_id           INTEGER REFERENCES sms_inbox(id) ON DELETE SET NULL,
-  txn_at           TEXT NOT NULL,          -- when it happened (from the SMS when present, else when received), UTC ISO
-  received_at      TEXT NOT NULL,
-  amount           REAL NOT NULL,          -- always positive; see direction
-  currency         TEXT NOT NULL DEFAULT 'INR',
-  direction        TEXT NOT NULL,          -- debit | credit
-  kind             TEXT NOT NULL,          -- spend | income | refund | transfer | card_payment | cash_withdrawal | investment | failed
-  channel          TEXT,                   -- UPI | CARD | NEFT | IMPS | RTGS | NACH | ATM | CHEQUE | WALLET | OTHER
-  bank             TEXT,                   -- HDFC | ICICI | SBI | AXIS | KOTAK | ...
-  account_last4    TEXT,                   -- only the last 4 digits, never a full number
-  card_last4       TEXT,
-  txn_ref          TEXT,                   -- UPI ref / RRN / UTR / transaction id
-  counterparty     TEXT,                   -- who the money went to / came from, as written in the SMS
-  counterparty_key TEXT,                   -- normalised for grouping and rules
-  vpa              TEXT,                   -- UPI id, e.g. swiggy@icici
-  purpose          TEXT,                   -- remarks / narration / "salary nov" / "autopay"
-  category         TEXT,                   -- food, groceries, travel, shopping, bills, rent, investing, ...
-  flags            TEXT,                   -- comma list: large,new_merchant,international,atm,late_night,possible_duplicate,low_confidence
-  confidence       REAL NOT NULL DEFAULT 1,
-  status           TEXT NOT NULL DEFAULT 'auto',   -- auto | needs_review | confirmed | ignored
-  note             TEXT
+-- ================= Finance (bank SMS, parsed by regex in src/finance.ts) =================
+-- One row per transaction. Only parsed fields are kept: the SMS text is never stored and never sent to Gemini.
+-- sms_hash = HMAC-SHA256 of the SMS keyed with INGEST_KEY, so a resent SMS is stored once.
+CREATE TABLE IF NOT EXISTS finance_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  date          TEXT NOT NULL,               -- YYYY-MM-DD (IST, when received)
+  time          TEXT,                        -- HH:MM (IST)
+  type          TEXT NOT NULL,               -- debit | credit | refund
+  amount        REAL NOT NULL,
+  account_last4 TEXT NOT NULL,               -- last 4 digits only
+  merchant      TEXT,
+  balance       REAL,
+  channel       TEXT,                        -- bank | upi | card | auto_debit
+  raw_direction TEXT,                        -- the verb in the SMS: debited, paid, reversed...
+  date_in_sms   TEXT,                        -- the date as the SMS wrote it
+  source        TEXT DEFAULT 'sms',
+  sms_hash      TEXT UNIQUE,
+  created_at    TEXT DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_txn_at        ON transactions(txn_at);
-CREATE INDEX IF NOT EXISTS idx_txn_cp        ON transactions(counterparty_key);
-CREATE INDEX IF NOT EXISTS idx_txn_category  ON transactions(category);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_ref ON transactions(txn_ref, direction, amount) WHERE txn_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_finance_date ON finance_log(date);
 
--- Your corrections, applied to every future SMS: "SWIGGY -> food", "paytmqr281005 -> Chai Point", "ignore cashback".
-CREATE TABLE IF NOT EXISTS merchant_rules (
-  id            INTEGER PRIMARY KEY,
-  match_key     TEXT NOT NULL UNIQUE,      -- counterparty_key or vpa to match
-  display_name  TEXT,
-  category      TEXT,
-  kind          TEXT,                      -- e.g. transfer for your own accounts
-  ignore        INTEGER NOT NULL DEFAULT 0,
-  created_at    TEXT NOT NULL
-);
-
--- ================= Apple Health (daily totals from an iPhone Shortcut) =================
--- One row per IST day. Re-sending the same day updates it (non-null values win). Never sent to Gemini or Telegram.
-CREATE TABLE IF NOT EXISTS health_daily (
-  date              TEXT PRIMARY KEY,        -- YYYY-MM-DD (IST)
-  steps             INTEGER,
-  distance_km       REAL,                    -- walking + running
-  flights           INTEGER,
-  active_kcal       REAL,
-  resting_kcal      REAL,
-  exercise_min      REAL,
-  stand_hours       INTEGER,
-  avg_hr            REAL,
-  resting_hr        REAL,
-  walking_hr        REAL,
-  hrv_ms            REAL,
-  vo2max            REAL,
-  respiratory_rate  REAL,
-  spo2_pct          REAL,
-  sleep_min         REAL,                    -- asleep time for the night that ended this day
-  in_bed_min        REAL,
-  weight_kg         REAL,
-  body_fat_pct      REAL,
-  mindful_min       REAL,
-  source            TEXT,                    -- e.g. "iphone-shortcut"
-  updated_at        TEXT NOT NULL
+-- ================= Apple Health ("Health Watcher" iPhone Shortcut) =================
+-- One row per IST day, upserted. A later sync fills in values but never blanks one. Never sent to Gemini or Telegram.
+CREATE TABLE IF NOT EXISTS health_log (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  date                  TEXT NOT NULL UNIQUE,   -- YYYY-MM-DD, the upsert key
+  steps                 INTEGER,
+  exercise_minutes      INTEGER,
+  running_speed         REAL,
+  walk_run_distance     REAL,
+  heart_rate_avg        REAL,
+  sleep_minutes         INTEGER,
+  weight_kg             REAL,
+  active_cal            REAL,
+  stand_minutes         INTEGER,
+  running_power         REAL,
+  running_stride_length REAL,
+  raw_json              TEXT,                   -- the last payload, for debugging
+  created_at            TEXT DEFAULT (datetime('now'))
 );
 
 -- ================= Batch notes =================

@@ -59,7 +59,7 @@ globalThis.fetch = async (url, init) => {
 
 const botEnv = { DB, GEMINI_MODEL: "m", GEMINI_API_KEY: "k", TELEGRAM_TOKEN: "t", OWNER_CHAT_ID: "1" };
 const BOT = new botMod.RyukRPC({}, botEnv);
-const env = { DB, BOT, FILES, TEAM_DOMAIN: "team.cloudflareaccess.com", POLICY_AUD: "AUD1", ALLOWED_EMAIL: "me@example.com" };
+const env = { DB, BOT, FILES, TEAM_DOMAIN: "team.cloudflareaccess.com", POLICY_AUD: "AUD1", ALLOWED_EMAIL: "me@example.com", ALLOWED_SERVICE_TOKEN: "tok1.access" };
 const call = async (method, path, body, headers = {}, token = good) => {
   const init = { method, headers: { "Cf-Access-Jwt-Assertion": token, ...headers } };
   if (body !== undefined) { init.body = typeof body === "string" || body instanceof Uint8Array ? body : JSON.stringify(body); if (!headers["content-type"]) init.headers["content-type"] = "application/json"; }
@@ -77,6 +77,14 @@ r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["OTHER"], em
 ok("wrong AUD -> aud_mismatch", r.status === 403 && /aud_mismatch/.test(r.body), r);
 r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], email: "x@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }));
 ok("other email -> email_mismatch", r.status === 403 && /email_mismatch/.test(r.body), r);
+r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
+ok("allowed service token -> 200", r.status === 200, r);
+r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "other.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
+ok("other service token -> email_mismatch", r.status === 403 && /email_mismatch/.test(r.body), r);
+r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["OTHER"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
+ok("service token, wrong AUD -> aud_mismatch", r.status === 403 && /aud_mismatch/.test(r.body), r);
+r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) - 10 }));
+ok("service token, expired -> expired", r.status === 403 && /expired/.test(r.body), r);
 r = await call("GET", "/");
 ok("page loads with media CSP", r.status === 200 && /media-src 'self' blob:/.test(r.headers.get("content-security-policy")));
 

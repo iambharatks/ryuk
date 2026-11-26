@@ -12,6 +12,7 @@ export interface Env {
   TEAM_DOMAIN: string;     // e.g. "yourteam.cloudflareaccess.com"
   POLICY_AUD: string;      // Access application "Application Audience (AUD) Tag"
   ALLOWED_EMAIL: string;   // the only email allowed in
+  ALLOWED_SERVICE_TOKEN?: string; // optional: Access service-token Client ID (the iOS app); unset = disabled
   BOT?: BotRPC;            // Service Binding to the bot's RyukRPC entrypoint
   FILES?: R2Bucket;        // R2 bucket for shelf uploads (optional)
 }
@@ -53,6 +54,10 @@ async function verifyAccess(req: Request, env: Env): Promise<{ email?: string; r
   const aud: string[] = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(env.POLICY_AUD)) return { reason: "aud_mismatch" };
   if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return { reason: "expired" };
+  // Service-token JWTs (iOS app) carry no email, only common_name = the token's Client ID.
+  if (!payload.email && env.ALLOWED_SERVICE_TOKEN && typeof payload.common_name === "string" && payload.common_name === env.ALLOWED_SERVICE_TOKEN) {
+    return { email: `service:${payload.common_name}` };
+  }
   if (env.ALLOWED_EMAIL && String(payload.email ?? "").toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase()) return { reason: "email_mismatch" };
   return { email: payload.email as string };
 }

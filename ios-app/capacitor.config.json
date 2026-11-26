@@ -1,0 +1,15 @@
+{
+  "appId": "com.iambharatks.ryuk",
+  "appName": "Ryuk",
+  "webDir": "www",
+  "server": {
+    "cleartext": false,
+    "allowNavigation": [
+      "ryuk-dash.iambharatks.workers.dev"
+    ]
+  },
+  "ios": {
+    "allowsLinkPreview": false,
+    "backgroundColor": "#0B0B0E"
+  }
+}

@@ -4,8 +4,8 @@
  */
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled: boolean; app: boolean; state: string | null; next: string }): string {
-  const cfg = JSON.stringify({ app: o.app, state: o.state, next: o.next, setup: !o.hasPasskeys }).replace(/</g, "\\u003c");
+export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled: boolean; next: string }): string {
+  const cfg = JSON.stringify({ next: o.next, setup: !o.hasPasskeys }).replace(/</g, "\\u003c");
   const setup = !o.hasPasskeys;
   return `<!doctype html>
 <html lang="en"><head>
@@ -60,9 +60,9 @@ export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled
   <label for="code">Setup code</label>
   <input id="code" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" placeholder="from your wrangler secret">
   <button id="go" type="button">${KEY}<span>Create my passkey</span></button>` : `
-  <p class="msg">No passkey yet. Sign in once through Cloudflare Access and add one from the dashboard's key menu, or set <b>AUTH_SETUP_CODE</b> and reload.</p>`) : `
+  <p class="msg">No passkey yet. Set the <b>AUTH_SETUP_CODE</b> secret on the dashboard, then reload this page.</p>`) : `
   <button id="go" type="button" autofocus>${FACE}<span>Unlock with Face ID</span></button>`}
-  <p id="msg" class="msg" role="status" aria-live="polite">${o.app ? "Signing in to the app." : ""}</p>
+  <p id="msg" class="msg" role="status" aria-live="polite"></p>
   <div class="foot">only the keeper's devices</div>
 </main>
 <script nonce="${esc(o.nonce)}">
@@ -93,7 +93,7 @@ export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled
         challenge: u2b(o.challenge), rpId: o.rpId, timeout: o.timeout, userVerification: o.userVerification || "required", allowCredentials: [],
       } });
       const r = cred.response;
-      done(await post("/auth/login/verify", { app: cfg.app, state: cfg.state, next: cfg.next, response: {
+      done(await post("/auth/login/verify", { next: cfg.next, response: {
         id: cred.id, rawId: b2u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(), authenticatorAttachment: cred.authenticatorAttachment,
         response: { clientDataJSON: b2u(r.clientDataJSON), authenticatorData: b2u(r.authenticatorData), signature: b2u(r.signature), userHandle: r.userHandle ? b2u(r.userHandle) : undefined },
       } }));
@@ -112,7 +112,7 @@ export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled
         authenticatorSelection: o.authenticatorSelection, excludeCredentials: (o.excludeCredentials || []).map((c) => ({ type: "public-key", id: u2b(c.id), transports: c.transports })),
       } });
       const r = cred.response;
-      done(await post("/auth/setup/verify", { code, name: device(), app: cfg.app, state: cfg.state, next: cfg.next, response: {
+      done(await post("/auth/setup/verify", { code, name: device(), next: cfg.next, response: {
         id: cred.id, rawId: b2u(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(), authenticatorAttachment: cred.authenticatorAttachment,
         response: { clientDataJSON: b2u(r.clientDataJSON), attestationObject: b2u(r.attestationObject), transports: r.getTransports ? r.getTransports() : [] },
       } }));
@@ -121,7 +121,6 @@ export function loginPage(o: { nonce: string; hasPasskeys: boolean; setupEnabled
 
   go.addEventListener("click", cfg.setup ? setup : unlock);
   if (cfg.setup) $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") setup(); });
-  if (new URLSearchParams(location.search).get("error") === "code") say("That sign-in link expired. Unlock again.", true);
 })();
 </script>
 </body></html>`;

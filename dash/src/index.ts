@@ -1,8 +1,7 @@
 /**
  * ryuk-dash: private Ryuk dashboard.
- * Sign-in is a passkey (auth.ts): only devices you registered get a session. While Cloudflare Access is still
- * switched on in front, a valid Access JWT for ALLOWED_EMAIL also counts (verified here, not just trusted).
- * Nothing but the login page and the passkey ceremonies answers without one of the two.
+ * Sign-in (auth.ts): a passkey on the website, a Secure Enclave device key in the iOS app. Either gives a session
+ * cookie; nothing but the login page and the two sign-in ceremonies answers without one.
  */
 import PAGE from "./page.html";
 import { addGoal, addPin, deleteGoal, deletePin, orderPins, editGoal, editPin, listGoals, listPins } from "./workspace";
@@ -12,53 +11,8 @@ import { addRule, addTxn, coinData, deleteRule, deleteTxn, editTxn, exportTxns, 
 
 export interface Env extends AuthEnv {
   DB: D1Database;
-  TEAM_DOMAIN: string;     // e.g. "yourteam.cloudflareaccess.com"
-  POLICY_AUD: string;      // Access application "Application Audience (AUD) Tag"
-  ALLOWED_EMAIL: string;   // the only email allowed in
   BOT?: BotRPC;            // Service Binding to the bot's RyukRPC entrypoint
   FILES?: R2Bucket;        // R2 bucket for shelf uploads (optional)
-}
-
-// ---------- Access JWT verification ----------
-type Jwk = JsonWebKey & { kid: string };
-let certCache: { keys: Jwk[]; at: number } | null = null;
-
-const b64urlToBytes = (s: string) => {
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=");
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-};
-const b64urlJson = (s: string) => JSON.parse(new TextDecoder().decode(b64urlToBytes(s)));
-
-async function getKeys(env: Env): Promise<Jwk[]> {
-  if (certCache && Date.now() - certCache.at < 3600e3) return certCache.keys;
-  const res = await fetch(`https://${env.TEAM_DOMAIN}/cdn-cgi/access/certs`);
-  const data: any = await res.json();
-  certCache = { keys: data.keys, at: Date.now() };
-  return data.keys;
-}
-
-// Returns the signed-in email, or a short reason code (shown on the Forbidden page; reveals no values).
-async function verifyAccess(req: Request, env: Env): Promise<{ email?: string; reason?: string }> {
-  if (!env.TEAM_DOMAIN || env.TEAM_DOMAIN.startsWith("REPLACE") || !env.POLICY_AUD || env.POLICY_AUD.startsWith("REPLACE")) return { reason: "config_missing" };
-  const token = req.headers.get("Cf-Access-Jwt-Assertion");
-  if (!token) return { reason: "no_access_token" };
-  const [h, p, sig] = token.split(".");
-  if (!h || !p || !sig) return { reason: "bad_token" };
-  const header = b64urlJson(h);
-  const payload = b64urlJson(p);
-  let keys: Jwk[];
-  try { keys = await getKeys(env); } catch { return { reason: "team_domain_unreachable" }; }
-  const jwk = keys.find((k) => k.kid === header.kid);
-  if (!jwk) return { reason: "team_domain_mismatch" };
-  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-  const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64urlToBytes(sig), new TextEncoder().encode(`${h}.${p}`));
-  if (!ok) return { reason: "bad_signature" };
-  const aud: string[] = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!aud.includes(env.POLICY_AUD)) return { reason: "aud_mismatch" };
-  if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return { reason: "expired" };
-  // Service tokens (no email) are not accepted: the iOS app signs in with a passkey like everything else.
-  if (env.ALLOWED_EMAIL && String(payload.email ?? "").toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase()) return { reason: "email_mismatch" };
-  return { email: payload.email as string };
 }
 
 // ---------- Data API ----------
@@ -202,18 +156,10 @@ export default {
     const url = new URL(req.url);
     if (crossSite(req, url)) return new Response("Forbidden (cross_site)", { status: 403, headers: { "cache-control": "no-store" } });
 
-    // who is this: a passkey session, else (while Access is still on) the Access JWT Cloudflare attached
-    let who: Who | null = await sessionFrom(req, env);
-    let reason = "signed_out";
-    if (!who && req.headers.get("Cf-Access-Jwt-Assertion")) {
-      const a = await verifyAccess(req, env).catch(() => ({ reason: "verify_error" }) as { email?: string; reason?: string });
-      if (a.email) who = { via: "access", email: a.email }; else reason = a.reason ?? "bad_token";
-    }
-
+    const who: Who | null = await sessionFrom(req, env);
     const open = await publicRoute(req, env, url, who);
     if (open) return open;
     if (!who) {
-      if (reason !== "signed_out") return new Response(`Forbidden (${reason})`, { status: 403, headers: { "cache-control": "no-store" } });
       const page = req.method === "GET" && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/auth/");
       return page
         ? new Response(null, { status: 302, headers: { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" } })

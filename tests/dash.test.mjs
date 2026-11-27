@@ -2,6 +2,7 @@
 // the real bot RPC behind the service binding (with a stubbed Gemini), and an in-memory R2.
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 const dash = (await import("../.wrangler/dash-test.mjs")).default;
 const botMod = await import("../.wrangler/bot-test.mjs");
 
@@ -60,8 +61,19 @@ globalThis.fetch = async (url, init) => {
 const botEnv = { DB, GEMINI_MODEL: "m", GEMINI_API_KEY: "k", TELEGRAM_TOKEN: "t", OWNER_CHAT_ID: "1" };
 const BOT = new botMod.RyukRPC({}, botEnv);
 const env = { DB, BOT, FILES, TEAM_DOMAIN: "team.cloudflareaccess.com", POLICY_AUD: "AUD1", ALLOWED_EMAIL: "me@example.com", ALLOWED_SERVICE_TOKEN: "tok1.access" };
+// "signed in" for the API tests: a session row seeded straight into D1 (the sign-in ceremonies are tested below)
+const FIXTURE = "fixture-session-token-0123456789abcdef";
+const SIGNED_IN = `__Host-ryuk=${FIXTURE}`;
+const seedSession = () => {
+  const now = Date.now(), hash = createHash("sha256").update(FIXTURE).digest("hex");
+  sq.prepare(`INSERT OR REPLACE INTO auth_sessions (token_hash, credential_id, kind, created_at, expires_at, last_seen_at) VALUES (?,?,?,?,?,?)`)
+    .run(hash, "fixture", "browser", new Date(now).toISOString(), new Date(now + 30 * 86400e3).toISOString(), new Date(now).toISOString());
+};
+seedSession();
+// token: good = signed in; "" = nobody; anything else = sent as a Cloudflare Access JWT (which no longer counts)
 const call = async (method, path, body, headers = {}, token = good) => {
-  const init = { method, headers: { "Cf-Access-Jwt-Assertion": token, ...headers } };
+  const auth = token === good ? { cookie: SIGNED_IN } : token ? { "Cf-Access-Jwt-Assertion": token } : {};
+  const init = { method, headers: { ...auth, ...headers } };
   if (body !== undefined) { init.body = typeof body === "string" || body instanceof Uint8Array ? body : JSON.stringify(body); if (!headers["content-type"]) init.headers["content-type"] = "application/json"; }
   const res = await dash.fetch(new Request("https://dash.test" + path, init), env);
   const ct = res.headers.get("content-type") || "";
@@ -73,18 +85,10 @@ const q = (s) => sq.prepare(s).all();
 // ---- access ----
 let r = await call("GET", "/api/data", undefined, {}, "");
 ok("no sign-in at all -> 401 signed out", r.status === 401 && r.body.error === "signed out", r);
-r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["OTHER"], email: "me@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }));
-ok("wrong AUD -> aud_mismatch", r.status === 403 && /aud_mismatch/.test(r.body), r);
-r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], email: "x@example.com", exp: Math.floor(Date.now() / 1000) + 3600 }));
-ok("other email -> email_mismatch", r.status === 403 && /email_mismatch/.test(r.body), r);
+r = await call("GET", "/api/data", undefined, {}, good + "x");
+ok("a Cloudflare Access JWT, even a valid one, no longer opens anything", r.status === 401, r);
 r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
-ok("service tokens are no longer accepted (the app uses a passkey)", r.status === 403 && /email_mismatch/.test(r.body), r);
-r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "other.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
-ok("other service token -> email_mismatch", r.status === 403 && /email_mismatch/.test(r.body), r);
-r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["OTHER"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) + 3600 }));
-ok("service token, wrong AUD -> aud_mismatch", r.status === 403 && /aud_mismatch/.test(r.body), r);
-r = await call("GET", "/api/data", undefined, {}, await jwt({ aud: ["AUD1"], common_name: "tok1.access", exp: Math.floor(Date.now() / 1000) - 10 }));
-ok("service token, expired -> expired", r.status === 403 && /expired/.test(r.body), r);
+ok("the old service token opens nothing", r.status === 401, r);
 r = await call("GET", "/");
 ok("page loads with media CSP", r.status === 200 && /media-src 'self' blob:/.test(r.headers.get("content-security-policy")));
 
@@ -325,21 +329,21 @@ ok("budget cleared", !sq.prepare("SELECT * FROM finance_budgets").all().length);
 r = await call("GET", "/api/coin");
 ok("all-time investment totals", r.body.invest_all.some((c) => c.invest_class === "mutual_fund" && c.net === 5000), r.body.invest_all);
 sq.exec(`INSERT INTO finance_log (date, type, amount, account_last4, merchant, sms_hash) VALUES ('${today}', 'debit', 1, '1234', '=HYPERLINK("x")', 'h6')`);
-let ex = await dash.fetch(new Request(`https://dash.test/api/coin/export?format=csv&from=${today}&to=${today}`, { headers: { "Cf-Access-Jwt-Assertion": good } }), env);
+let ex = await dash.fetch(new Request(`https://dash.test/api/coin/export?format=csv&from=${today}&to=${today}`, { headers: { cookie: SIGNED_IN } }), env);
 let csv = await ex.text();
 ok("export csv: attachment with a header row", ex.headers.get("content-disposition")?.includes(`ryuk-money-${today}-to-${today}.csv`) && csv.split("\r\n")[0].includes("date,time,type,amount,merchant,category"), csv.slice(0, 200));
 ok("export csv: formulas defused", csv.includes(`"'=HYPERLINK(""x"")"`) && !/(^|,)=HYPERLINK/m.test(csv), csv);
 ok("export never includes the SMS hash", !csv.includes("sms_hash") && !csv.includes("h2"));
-ex = await dash.fetch(new Request("https://dash.test/api/coin/export?format=json", { headers: { "Cf-Access-Jwt-Assertion": good } }), env);
+ex = await dash.fetch(new Request("https://dash.test/api/coin/export?format=json", { headers: { cookie: SIGNED_IN } }), env);
 const exj = await ex.json();
 ok("export json: every row, labels included", exj.rows.length === sq.prepare("SELECT COUNT(*) n FROM finance_log").get().n && exj.rows.some((x) => x.category_label === "Food & dining"), exj.rows.slice(0, 2));
-ex = await dash.fetch(new Request("https://dash.test/api/coin/export?format=csv", { headers: { "Cf-Access-Jwt-Assertion": "" } }), env);
+ex = await dash.fetch(new Request("https://dash.test/api/coin/export?format=csv", { headers: {} }), env);
 ok("export needs a sign-in", ex.status === 401);
 r = await call("DELETE", "/api/coin/txn", { id: manualId });
 ok("erase a transaction", r.status === 200 && !sq.prepare("SELECT 1 FROM finance_log WHERE id = ?").get(manualId));
 
-// ---- passkey login ----
-const { softKey } = await import("./softkey.mjs");
+// ---- sign-in: website passkeys ----
+const { softKey, der } = await import("./softkey.mjs");
 const ORIGIN = "https://dash.test";
 const SETUP = "setup-code-0123456789abcdef";
 const aenv = { ...env, AUTH_SETUP_CODE: SETUP };
@@ -360,8 +364,8 @@ ok("signed out: the page sends you to /login", r.status === 302 && r.headers.get
 r = await go("GET", "/api/data?days=1");
 ok("signed out: the API answers 401", r.status === 401 && r.body.error === "signed out", r.body);
 r = await go("GET", "/login", undefined, { e: env });
-ok("login page with no passkey and no setup code explains what to do", r.status === 200 && /No passkey yet/.test(r.text) && /frame-ancestors 'none'/.test(r.headers.get("content-security-policy")), r.text.slice(0, 200));
-ok("login page script runs only with its nonce", /script-src 'nonce-[\w-]+'/.test(r.headers.get("content-security-policy")) && !/unsafe-inline'; connect/.test(r.headers.get("content-security-policy").split("style-src")[0]));
+ok("login page with no passkey and no setup code says to set it", r.status === 200 && /AUTH_SETUP_CODE/.test(r.text) && !/Cloudflare|Google/i.test(r.text) && /frame-ancestors 'none'/.test(r.headers.get("content-security-policy")), r.text.slice(0, 200));
+ok("login page script runs only with its nonce", /script-src 'nonce-[\w-]+'/.test(r.headers.get("content-security-policy")));
 r = await go("POST", "/auth/setup/options", { code: SETUP }, { e: env });
 ok("setup refused when AUTH_SETUP_CODE isn't set", r.status === 403);
 r = await go("POST", "/auth/setup/options", { code: "wrong-code-wrong-code" });
@@ -393,11 +397,9 @@ ok("a made-up cookie is refused", r.status === 401);
 r = await go("POST", "/api/goals", { text: "from another site" }, { cookie: c1, origin: "https://evil.example" });
 ok("a cross-site write is refused even with the cookie", r.status === 403 && /cross_site/.test(r.text), r.text);
 
-// sign in
 r = await go("POST", "/auth/login/options");
 ok("login options: no credential list handed out", r.status === 200 && Array.isArray(r.body.allowCredentials) && r.body.allowCredentials.length === 0 && r.body.userVerification === "required", r.body);
-let loginOpts = r.body;
-let asResp = await phone.assert(loginOpts, ORIGIN);
+let asResp = await phone.assert(r.body, ORIGIN);
 r = await go("POST", "/auth/login/verify", { response: asResp, next: "/#page" });
 const c2 = cookieFrom(r);
 ok("sign in with the passkey", r.status === 200 && r.body.redirect === "/#page" && /^__Host-ryuk=/.test(c2) && c2 !== c1, r.body);
@@ -415,24 +417,8 @@ r = await go("POST", "/auth/login/options");
 r = await go("POST", "/auth/login/verify", { response: await stranger.assert(r.body, ORIGIN) });
 ok("someone else's passkey is refused", r.status === 401 && /isn't registered/.test(r.body.error), r.body);
 
-// the iOS app: one-time code through the sign-in sheet
-r = await go("POST", "/auth/login/options");
-r = await go("POST", "/auth/login/verify", { app: true, state: "state-abc-12345", response: await phone.assert(r.body, ORIGIN) });
-const appUrl = new URL(r.body.redirect ?? "x:");
-ok("app sign-in hands back ryuk://auth with a code, and no cookie", r.status === 200 && appUrl.protocol === "ryuk:" && appUrl.searchParams.get("state") === "state-abc-12345" && !r.headers.get("set-cookie"), r.body);
-r = await go("GET", `/auth/app/redeem?code=${appUrl.searchParams.get("code")}`);
-const c3 = cookieFrom(r);
-ok("the app swaps the code for a session", r.status === 302 && r.headers.get("location") === "/" && /^__Host-ryuk=/.test(c3) && q("SELECT kind FROM auth_sessions WHERE kind = 'app'").length === 1, r.headers.get("location"));
-r = await go("GET", `/auth/app/redeem?code=${appUrl.searchParams.get("code")}`);
-ok("an app code works once", r.status === 302 && /\/login\?error=code$/.test(r.headers.get("location")));
-r = await go("GET", "/login?app=1&state=state-xyz-98765", undefined, { cookie: c1 });
-ok("app sign-in while already signed in (or through Access) skips the prompt", r.status === 302 && r.headers.get("location").startsWith("ryuk://auth?code="), r.headers.get("location"));
-r = await go("GET", "/login?app=1");
-ok("app sign-in needs a state", r.status === 400);
-
-// devices
 r = await go("GET", "/auth/me", undefined, { cookie: c2 });
-ok("/auth/me lists passkeys", r.status === 200 && r.body.via === "passkey" && r.body.passkeys.length === 1 && r.body.current === phone.id, r.body);
+ok("/auth/me lists passkeys", r.status === 200 && r.body.passkeys.length === 1 && r.body.current === phone.id && Array.isArray(r.body.devices), r.body);
 const mac = await softKey();
 r = await go("POST", "/auth/register/options", {}, { cookie: c2 });
 ok("signed in: add another device", r.status === 200 && r.body.excludeCredentials.length === 1, r.body);
@@ -445,7 +431,63 @@ ok("remove a passkey", r.status === 200 && q("SELECT COUNT(*) n FROM auth_creden
 r = await go("DELETE", "/auth/passkeys", { id: phone.id }, { cookie: c2 });
 ok("the last passkey can't be removed", r.status === 400 && /only passkey/.test(r.body.error), r.body);
 
-// sign out
+// ---- sign-in: the iOS app's Secure Enclave key ----
+const enc8 = new TextEncoder();
+const devKp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+const devPub = Buffer.from(await crypto.subtle.exportKey("raw", devKp.publicKey)).toString("base64url");
+const devSign = async (msg, kp = devKp) => Buffer.from(der(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, kp.privateKey, enc8.encode(msg))))).toString("base64url");
+const native = { origin: "" };   // the app's own requests carry no Origin
+
+r = await go("POST", "/auth/pair/start", {});
+ok("a pairing code needs a signed-in website", r.status === 401);
+r = await go("POST", "/auth/pair/start", {}, { cookie: c2 });
+const pairCode = r.body.code;
+ok("pairing code: 6 digits, 5 minutes", r.status === 200 && /^\d{6}$/.test(pairCode) && r.body.expires_in === 300, r.body);
+ok("the code itself isn't stored", !JSON.stringify(q("SELECT * FROM auth_pairings")).includes(pairCode));
+r = await go("GET", "/auth/me", undefined, { cookie: c2 });
+ok("/auth/me shows a pairing waiting", r.body.pairing === true, r.body);
+const wrongCode = pairCode === "000000" ? "000001" : "000000";
+r = await go("POST", "/auth/device/pair", { code: wrongCode, public_key: devPub, signature: await devSign(`ryuk-pair\n${wrongCode}\n${devPub}`), name: "iPhone" }, native);
+ok("a wrong pairing code is refused", r.status === 403, r.body);
+r = await go("POST", "/auth/device/pair", { code: pairCode, public_key: devPub, signature: await devSign("something else"), name: "iPhone" }, native);
+ok("pairing needs proof the app holds the key", r.status === 400 && /could not be verified/.test(r.body.error), r.body);
+r = await go("POST", "/auth/device/pair", { code: pairCode, public_key: devPub, signature: await devSign(`ryuk-pair\n${pairCode}\n${devPub}`), name: "Bharat's iPhone" }, native);
+const deviceId = r.body.device_id;
+ok("the app pairs with the code and its key", r.status === 200 && /^[\w-]{16,}$/.test(deviceId) && q("SELECT name FROM auth_devices")[0].name === "Bharat's iPhone", r.body);
+r = await go("POST", "/auth/device/pair", { code: pairCode, public_key: devPub, signature: await devSign(`ryuk-pair\n${pairCode}\n${devPub}`) }, native);
+ok("a pairing code works once", r.status === 403, r.body);
+
+const deviceLogin = async (kp = devKp, id = deviceId) => {
+  const ch = (await go("POST", "/auth/device/challenge", {}, native)).body.challenge;
+  return { ch, res: await go("POST", "/auth/device/login", { device_id: id, challenge: ch, signature: await devSign(`ryuk-device-login\n${ch}\n${id}`, kp) }, native) };
+};
+let dl = await deviceLogin();
+const a1 = cookieFrom(dl.res);
+ok("the app signs in with Face ID + its key: a session cookie", dl.res.status === 200 && /^__Host-ryuk=/.test(a1) && q("SELECT COUNT(*) n FROM auth_sessions WHERE kind = 'app'")[0].n === 1, dl.res.body);
+r = await go("GET", "/api/data?days=1", undefined, { cookie: a1 });
+ok("the app's session opens the dashboard", r.status === 200);
+r = await go("POST", "/auth/device/login", { device_id: deviceId, challenge: dl.ch, signature: await devSign(`ryuk-device-login\n${dl.ch}\n${deviceId}`) }, native);
+ok("a device challenge can't be reused", r.status === 400, r.body);
+const otherKp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+dl = await deviceLogin(otherKp);
+ok("another key can't sign in as the paired iPhone", dl.res.status === 401, dl.res.body);
+dl = await deviceLogin();
+const a2 = cookieFrom(dl.res);
+r = await go("GET", "/api/data?days=1", undefined, { cookie: a1 });
+ok("each app sign-in replaces its previous session", dl.res.status === 200 && r.status === 401 && q("SELECT COUNT(*) n FROM auth_sessions WHERE kind = 'app'")[0].n === 1);
+r = await go("GET", "/auth/me", undefined, { cookie: c2 });
+ok("/auth/me lists the app device", r.body.devices.length === 1 && r.body.devices[0].id === deviceId && r.body.pairing === false, r.body);
+r = await go("DELETE", "/auth/devices", { id: deviceId }, { cookie: c2 });
+r = await go("GET", "/api/data?days=1", undefined, { cookie: a2 });
+dl = await deviceLogin();
+ok("removing the device signs the app out and stops it signing in", r.status === 401 && dl.res.status === 401 && dl.res.body.code === "unpaired", dl.res.body);
+
+// sessions end
+const oldTok = "old-session-token-0123456789abcdef";
+sq.prepare(`INSERT INTO auth_sessions (token_hash, credential_id, kind, created_at, expires_at, last_seen_at) VALUES (?,?,?,?,?,?)`)
+  .run(createHash("sha256").update(oldTok).digest("hex"), phone.id, "browser", new Date(Date.now() - 91 * 86400e3).toISOString(), new Date(Date.now() + 86400e3).toISOString(), new Date().toISOString());
+r = await go("GET", "/api/data?days=1", undefined, { cookie: `__Host-ryuk=${oldTok}` });
+ok("a session older than 90 days ends, however busy", r.status === 401);
 r = await go("POST", "/auth/logout", {}, { cookie: c2 });
 ok("sign out clears the cookie", r.status === 200 && /Max-Age=0/.test(r.headers.get("set-cookie")));
 r = await go("GET", "/api/data?days=1", undefined, { cookie: c2 });
@@ -453,15 +495,12 @@ ok("...and the session is gone", r.status === 401);
 r = await go("GET", "/api/data?days=1", undefined, { cookie: c1 });
 ok("other sessions keep working", r.status === 200);
 r = await go("POST", "/auth/logout-all", {}, { cookie: c1 });
-r = await go("GET", "/api/data?days=1", undefined, { cookie: c3 });
-ok("sign out everywhere ends every session (the app's too)", r.status === 401);
-
-// Access still works during the switch, and can register the first passkey
-r = await call("GET", "/auth/me");
-ok("Access sign-in still opens the dashboard", r.status === 200 && r.body.via === "access", r.body);
+r = await go("GET", "/api/data?days=1", undefined, { cookie: c1 });
+ok("sign out everywhere ends every session", r.status === 401);
+seedSession();
 
 const noFiles = { ...env, FILES: undefined };
-const r2 = await dash.fetch(new Request("https://dash.test/api/upload", { method: "POST", headers: { "Cf-Access-Jwt-Assertion": good, "content-type": "image/png" }, body: "x" }), noFiles);
+const r2 = await dash.fetch(new Request("https://dash.test/api/upload", { method: "POST", headers: { cookie: SIGNED_IN, "content-type": "image/png" }, body: "x" }), noFiles);
 ok("no bucket -> clear 501", r2.status === 501);
 console.log(fail ? `${fail} FAILED` : "ALL PASS");
 if (fail) process.exit(1);

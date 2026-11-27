@@ -341,21 +341,28 @@ CREATE TABLE IF NOT EXISTS auth_credentials (
 );
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash    TEXT PRIMARY KEY,            -- SHA-256 of the cookie value
-  credential_id TEXT,                        -- the passkey that opened it (NULL: opened through Cloudflare Access)
+  credential_id TEXT,                        -- the key that opened it: passkey id, or "device:<id>" for the app
   kind          TEXT NOT NULL,               -- browser | app
   created_at    TEXT NOT NULL,
-  expires_at    TEXT NOT NULL,               -- slides forward while in use (30 days idle ends it)
+  expires_at    TEXT NOT NULL,               -- slides forward while in use (30 days idle; 90 days from created_at at most)
   last_seen_at  TEXT,
   user_agent    TEXT
 );
 CREATE TABLE IF NOT EXISTS auth_challenges (
   challenge     TEXT PRIMARY KEY,            -- single use, 5 minutes
-  purpose       TEXT NOT NULL,               -- login | register | setup
+  purpose       TEXT NOT NULL,               -- login | register | setup | device
   created_at    INTEGER NOT NULL             -- epoch ms
 );
-CREATE TABLE IF NOT EXISTS auth_app_codes (
-  code_hash     TEXT PRIMARY KEY,            -- one-time code handed to the iOS app (60 s)
-  credential_id TEXT,
+-- iOS app: a Secure Enclave key per paired iPhone (public half only). Sessions it opens have credential_id "device:<id>".
+CREATE TABLE IF NOT EXISTS auth_devices (
+  id            TEXT PRIMARY KEY,            -- random, given to the app when it pairs
+  public_key    TEXT NOT NULL,               -- X9.63 uncompressed P-256 point (base64url)
+  name          TEXT,
+  created_at    TEXT DEFAULT (datetime('now')),
+  last_used_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS auth_pairings (
+  code_hash     TEXT PRIMARY KEY,            -- SHA-256 of the 6-digit code the website shows (5 min, one use)
   created_at    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS auth_throttle (

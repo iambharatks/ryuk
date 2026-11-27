@@ -29,11 +29,14 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export type Passkey = { id: string; name: string | null; created_at: string; last_used_at: string | null };
-export type Me = { via: "passkey" | "access"; current: string | null; kind: string; passkeys: Passkey[]; sessions: number };
+export type AppDevice = { id: string; name: string | null; created_at: string; last_used_at: string | null };
+export type Me = { current: string | null; kind: string; passkeys: Passkey[]; devices: AppDevice[]; sessions: number; pairing: boolean };
 
 export const me = () => call<Me>("GET", "/auth/me");
 export const renamePasskey = (id: string, name: string) => call("PATCH", "/auth/passkeys", { id, name });
 export const removePasskey = (id: string) => call("DELETE", "/auth/passkeys", { id });
+export const startPairing = () => call<{ code: string; expires_in: number }>("POST", "/auth/pair/start", {});
+export const removeDevice = (id: string) => call("DELETE", "/auth/devices", { id });
 export const signOut = () => call("POST", "/auth/logout", {});
 export const signOutEverywhere = () => call("POST", "/auth/logout-all", {});
 export const passkeysWork = () => typeof window !== "undefined" && !!window.PublicKeyCredential;

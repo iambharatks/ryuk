@@ -21,7 +21,7 @@ function cbor(v) {
 }
 
 // raw r||s (WebCrypto) -> DER (WebAuthn)
-function der(sig) {
+export function der(sig) {
   const int = (b) => { let i = 0; while (i < b.length - 1 && b[i] === 0) i++; b = b.slice(i); if (b[0] & 0x80) b = cat(Uint8Array.of(0), b); return cat(Uint8Array.of(2, b.length), b); };
   const r = int(sig.slice(0, 32)), s = int(sig.slice(32));
   return cat(Uint8Array.of(0x30, r.length + s.length), r, s);

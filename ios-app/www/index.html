@@ -4,35 +4,81 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <style>
-    body { background: #0B0B0E; color: #ccc; font-family: -apple-system, sans-serif;
-           display: flex; justify-content: center; align-items: center;
-           min-height: 100vh; margin: 0; padding: 0 24px; box-sizing: border-box; text-align: center; }
-    #err { color: #c9c9d1; font-size: 14px; line-height: 1.5; max-width: 360px; }
-    button { margin-top: 16px; background: none; color: #ccc; border: 1px solid #444;
-             border-radius: 8px; padding: 8px 16px; font-size: 14px; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; min-height: 100%; background: #0d0a0f; color: #F4F4F6; }
+    body { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; text-align: center;
+      padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+    body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: radial-gradient(ellipse at 30% 18%, #1d1622 0%, #0d0a0f 62%); }
+    main { width: 100%; max-width: 340px; }
+    .emblem { width: 56px; height: 56px; margin: 0 auto 16px; filter: drop-shadow(0 0 18px rgba(200,75,49,.35)); }
+    h1 { margin: 0; font: 600 30px/1 "Iowan Old Style", Georgia, serif; letter-spacing: .18em; }
+    .sub { margin: 10px 0 28px; color: #8E8E9A; font: italic 16px/1.4 "Iowan Old Style", Georgia, serif; }
+    .msg { min-height: 22px; margin: 14px 0 0; color: #a9a9b4; font-size: 14px; }
+    input { width: 100%; height: 58px; margin: 0 0 10px; border-radius: 14px; border: 1px solid #24242C; background: #0B0B0E; color: #F4F4F6;
+      font: 600 28px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .4em; text-align: center; outline: none; padding-left: .4em; }
+    input:focus { border-color: rgba(200,75,49,.6); }
+    button { width: 100%; min-height: 52px; border-radius: 14px; border: 1px solid rgba(200,75,49,.55); background: linear-gradient(180deg, #1b1419, #141016);
+      color: #F4F4F6; font: 600 16px/1 inherit; box-shadow: 0 10px 30px -12px rgba(200,75,49,.45); }
+    button:active { transform: scale(.985); }
+    .hint { margin-top: 18px; color: #5E5E6A; font-size: 12.5px; line-height: 1.5; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <!-- The native RyukViewController loads the dashboard and opens the Face ID sign-in sheet when needed. -->
-  <div>
-    <p id="msg">Loading Ryuk…</p>
-    <p id="err" hidden></p>
-    <button id="retry" hidden onclick="ryukRetry()">Retry</button>
-  </div>
+  <!-- The native RyukViewController pairs this iPhone once, then opens the dashboard after Face ID. -->
+  <main>
+    <svg class="emblem" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M16 6.5c-1.2-2.2-3-3.2-5-3.4" stroke="#F4F4F6" stroke-width="1.4" stroke-linecap="round"/>
+      <path d="M16.6 7.2c1.6-2.6 4.4-3.3 6.4-2.6-.6 2.3-3 3.7-6.4 2.6Z" fill="#F4F4F6"/>
+      <path d="M24.9 12.2A10 10 0 1 0 25.4 22.6" stroke="#C84B31" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="16" cy="17.4" r="3.2" stroke="#F4F4F6" stroke-width="1.2"/>
+    </svg>
+    <h1>RYUK</h1>
+    <p class="sub" id="sub">Opening the notebook…</p>
+
+    <form id="pair" hidden>
+      <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000" aria-label="Pairing code">
+      <button type="submit">Pair this iPhone</button>
+      <p class="hint">On the website: <b>Keys</b> → <b>Pair the iPhone app</b>. The code works once, for five minutes.</p>
+    </form>
+
+    <p id="msg" class="msg" role="status" aria-live="polite"></p>
+    <button id="retry" type="button" hidden>Try again</button>
+  </main>
   <script>
-    function ryukRetry() {
-      var h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ryukRetry;
-      if (h) h.postMessage(1);
-    }
-    // message: what to say (null = just loading); button: label for the button (null = none)
+    var h = function (name) { return window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers[name]; };
+    var $ = function (id) { return document.getElementById(id); };
+
+    // native → page: a status line (null = none) and an optional button label
     window.ryukStatus = function (message, button) {
-      var err = document.getElementById('err'), retry = document.getElementById('retry');
-      err.textContent = message || '';
-      err.hidden = !message;
-      retry.textContent = button || 'Try again';
-      retry.hidden = !button;
-      document.getElementById('msg').textContent = message ? 'Ryuk' : 'Opening Ryuk…';
+      $('pair').hidden = true;
+      $('sub').textContent = 'The notebook is closed.';
+      $('msg').textContent = message || '';
+      $('retry').textContent = button || 'Try again';
+      $('retry').hidden = !button;
     };
+    // native → page: ask for the pairing code (with an optional message)
+    window.ryukPairing = function (message) {
+      $('sub').textContent = 'Pair this iPhone once. After that, Face ID opens it.';
+      $('pair').hidden = false;
+      $('retry').hidden = true;
+      $('msg').textContent = message || '';
+      $('code').value = '';
+      setTimeout(function () { $('code').focus(); }, 50);
+    };
+
+    // page → native
+    $('pair').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var code = ($('code').value || '').replace(/\D/g, '');
+      if (code.length !== 6) { $('msg').textContent = 'Enter the 6 digits.'; return; }
+      if (h('ryukPair')) h('ryukPair').postMessage(code);
+    });
+    $('code').addEventListener('input', function () { this.value = this.value.replace(/\D/g, '').slice(0, 6); });
+    $('retry').addEventListener('click', function () { if (h('ryukRetry')) h('ryukRetry').postMessage(1); });
+
+    if (h('ryukReady')) h('ryukReady').postMessage(1);
   </script>
 </body>
 </html>

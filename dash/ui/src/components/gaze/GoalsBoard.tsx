@@ -107,8 +107,23 @@ export function GoalsBoard({ store }: { store: Store }) {
       onMove: (dx, dy) => { last = { left: Math.min(span, Math.max(0, from.left + dx)), top: Math.min(maxTop, Math.max(0, from.top + dy)) }; setDrag({ id: g.id, ...last }); },
       onEnd: () => {
         setDrag(null);
-        const x = span ? Math.round((last.left / span) * 1000) / 1000 : 0, y = Math.round(last.top);
-        patch(g, { x, y, z: topZ + 1 }, { x, y, z: topZ + 1 });
+        const fx = (left: number) => (span ? Math.round((Math.min(span, left) / span) * 1000) / 1000 : 0);
+        const x = fx(last.left), y = Math.round(last.top);
+        // Pin every note that was still auto-placed to where it stands now. Otherwise the auto layout, which steers
+        // clear of placed notes, would push the note you just dropped onto out of the way.
+        const frozen = list.filter((o) => o.id !== g.id && (o.x == null || o.y == null)).map((o) => {
+          const b = boxes.out.get(o.id)!;
+          return { o, x: fx(b.left), y: Math.round(b.top) };
+        });
+        setGoals((gs) => gs!.map((o) => {
+          if (o.id === g.id) return { ...o, x, y, z: topZ + 1 };
+          const f = frozen.find((v) => v.o.id === o.id);
+          return f ? { ...o, x: f.x, y: f.y } : o;
+        }));
+        Promise.all([
+          store.editGoal(g.id, { x, y, z: topZ + 1 }),
+          ...frozen.map((f) => store.editGoal(f.o.id, { x: f.x, y: f.y })),
+        ]).then(() => setErr("")).catch((e) => setErr((e as Error).message));
       },
     });
   };

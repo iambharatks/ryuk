@@ -5,11 +5,11 @@
   <key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Ryuk uses Face ID to unlock your notebook.</string>
+	<string>Face ID unlocks your notebook.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Ryuk</string>
+	<string>ノート</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

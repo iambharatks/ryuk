@@ -1,6 +1,6 @@
 {
   "appId": "com.iambharatks.ryuk",
-  "appName": "Ryuk",
+  "appName": "ノート",
   "webDir": "www",
   "server": {
     "cleartext": false,

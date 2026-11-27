@@ -116,7 +116,7 @@ export default function App() {
         <div className="mx-auto grid max-w-[1400px] grid-cols-[auto_1fr_auto] items-center gap-4 py-3 page-x">
           <a href="#gaze" onClick={() => setView("Gaze")} className="flex min-h-[44px] items-center gap-2.5">
             <span className="emblem-pulse"><Emblem /></span>
-            <span className="font-frak text-[30px] leading-none tracking-[0.06em] text-ink">RYUK</span>
+            <span className="font-frak text-[30px] leading-none tracking-[0.04em] text-ink">{OWNER.name}</span>
           </a>
           <nav className="hidden justify-center lg:flex" aria-label="Views">
             <div className="flex gap-1 rounded-full border border-hairline bg-canvas/60 p-1">
@@ -127,13 +127,6 @@ export default function App() {
             </div>
           </nav>
           <div className="flex items-center justify-end gap-2">
-            <span className="hidden items-center gap-2.5 2xl:flex" title={OWNER.title}>
-              <span className="flex h-8 w-8 items-center justify-center rounded-full border border-apple/50 bg-apple/[0.08] font-serif text-[16px] text-ink">{OWNER.name[0]}</span>
-              <span className="leading-tight">
-                <span className="block text-[12.5px] text-ink">{OWNER.name}</span>
-                <span className="block font-mono text-[9.5px] uppercase tracking-[0.14em] text-slate">{OWNER.title}</span>
-              </span>
-            </span>
             <button onClick={() => setKeysOpen(true)} aria-label="Keys: passkeys and sign out" title="Keys"
               className="flex h-9 w-9 items-center justify-center rounded-full border border-hairline text-slate transition hover:border-hover hover:text-ink">
               <KeyRound size={14} />

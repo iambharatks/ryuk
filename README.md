@@ -69,33 +69,7 @@ Then it gives it back: streaks, a day page you can edit, a money ledger that sep
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  subgraph Phone["📱 iPhone"]
-    TG["Telegram"]
-    SC["Shortcuts<br/>bank SMS · Health · text"]
-    APP["Ryuk app<br/>(Capacitor, Face ID)"]
-  end
-  Browser["💻 Browser<br/>(passkey)"]
-
-  subgraph CF["Cloudflare (free tier)"]
-    BOT["<b>ryuk</b> Worker<br/>webhook · ingest · cron"]
-    DASH["<b>ryuk-dash</b> Worker<br/>sign-in · API · UI"]
-    D1[("D1<br/>SQLite")]
-    R2[("R2<br/>files")]
-  end
-  LLM["Gemini Flash-Lite<br/>JSON schema output"]
-
-  TG -- "webhook + secret" --> BOT
-  SC -- "Bearer key per source" --> BOT
-  BOT -- "free text only" --> LLM
-  BOT --> D1
-  APP -- "Secure Enclave signature → session" --> DASH
-  Browser -- "WebAuthn → session" --> DASH
-  DASH --> D1
-  DASH --> R2
-  DASH -- "Service Binding RPC" --> BOT
-```
+<p align="center"><img src="docs/architecture.svg" alt="How Ryuk works: phone inputs flow into two Cloudflare Workers sharing D1 and R2; only free text reaches the LLM; sign-in is Face ID only" width="100%"></p>
 
 Two Workers share one D1 database. The bot owns ingestion (Telegram, Shortcuts, a nightly summary); the dashboard owns sign-in, the API
 and a single inlined HTML page (React, built to one file). The dashboard asks the bot to parse text through a Service Binding, so the LLM

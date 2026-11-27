@@ -1,19 +1,20 @@
 /**
  * ryuk-dash: private Ryuk dashboard.
- * Cloudflare Access sits in front of this Worker; the Worker ALSO verifies the Access JWT itself,
- * so the data stays private even if Access is ever switched off by mistake.
+ * Sign-in is a passkey (auth.ts): only devices you registered get a session. While Cloudflare Access is still
+ * switched on in front, a valid Access JWT for ALLOWED_EMAIL also counts (verified here, not just trusted).
+ * Nothing but the login page and the passkey ceremonies answers without one of the two.
  */
 import PAGE from "./page.html";
 import { addGoal, addPin, deleteGoal, deletePin, orderPins, editGoal, editPin, listGoals, listPins } from "./workspace";
 import { type BotRPC, addLibrary, addTask, deleteLibrary, deleteTask, editEntry, editLibrary, editTask, getPage, libraryProgress, serveFile, upload } from "./extra";
+import { type AuthEnv, type Who, crossSite, privateRoute, publicRoute, sessionFrom } from "./auth";
 import { addRule, addTxn, coinData, deleteRule, deleteTxn, editTxn, exportTxns, reclassify, setBudget } from "./coin";
 
-export interface Env {
+export interface Env extends AuthEnv {
   DB: D1Database;
   TEAM_DOMAIN: string;     // e.g. "yourteam.cloudflareaccess.com"
   POLICY_AUD: string;      // Access application "Application Audience (AUD) Tag"
   ALLOWED_EMAIL: string;   // the only email allowed in
-  ALLOWED_SERVICE_TOKEN?: string; // optional: Access service-token Client ID (the iOS app); unset = disabled
   BOT?: BotRPC;            // Service Binding to the bot's RyukRPC entrypoint
   FILES?: R2Bucket;        // R2 bucket for shelf uploads (optional)
 }
@@ -55,10 +56,7 @@ async function verifyAccess(req: Request, env: Env): Promise<{ email?: string; r
   const aud: string[] = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(env.POLICY_AUD)) return { reason: "aud_mismatch" };
   if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now()) return { reason: "expired" };
-  // Service-token JWTs (iOS app) carry no email, only common_name = the token's Client ID.
-  if (!payload.email && env.ALLOWED_SERVICE_TOKEN && typeof payload.common_name === "string" && payload.common_name === env.ALLOWED_SERVICE_TOKEN) {
-    return { email: `service:${payload.common_name}` };
-  }
+  // Service tokens (no email) are not accepted: the iOS app signs in with a passkey like everything else.
   if (env.ALLOWED_EMAIL && String(payload.email ?? "").toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase()) return { reason: "email_mismatch" };
   return { email: payload.email as string };
 }
@@ -201,17 +199,36 @@ async function deleteRow(env: Env, body: any) {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const auth = await verifyAccess(req, env).catch(() => ({ reason: "verify_error" }) as { email?: string; reason?: string });
-    if (!auth.email) return new Response(`Forbidden (${auth.reason})`, { status: 403, headers: { "cache-control": "no-store" } });
-
     const url = new URL(req.url);
+    if (crossSite(req, url)) return new Response("Forbidden (cross_site)", { status: 403, headers: { "cache-control": "no-store" } });
+
+    // who is this: a passkey session, else (while Access is still on) the Access JWT Cloudflare attached
+    let who: Who | null = await sessionFrom(req, env);
+    let reason = "signed_out";
+    if (!who && req.headers.get("Cf-Access-Jwt-Assertion")) {
+      const a = await verifyAccess(req, env).catch(() => ({ reason: "verify_error" }) as { email?: string; reason?: string });
+      if (a.email) who = { via: "access", email: a.email }; else reason = a.reason ?? "bad_token";
+    }
+
+    const open = await publicRoute(req, env, url, who);
+    if (open) return open;
+    if (!who) {
+      if (reason !== "signed_out") return new Response(`Forbidden (${reason})`, { status: 403, headers: { "cache-control": "no-store" } });
+      const page = req.method === "GET" && !url.pathname.startsWith("/api/") && !url.pathname.startsWith("/auth/");
+      return page
+        ? new Response(null, { status: 302, headers: { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" } })
+        : json({ error: "signed out" }, 401);
+    }
+    const mine = await privateRoute(req, env, url, who);
+    if (mine) return mine;
+
     if (url.pathname === "/" && req.method === "GET") {
       return new Response(PAGE, {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
           "content-security-policy":
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
         },
       });
     }

@@ -12,12 +12,15 @@
     "test:ingest": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild src/finance.ts --bundle --format=esm --platform=neutral --outfile=.wrangler/finance-test.mjs --log-level=warning && node --no-warnings tests/ingest.test.mjs",
     "test:batch": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild src/batch.ts --format=esm --outfile=.wrangler/batch-test.mjs --log-level=warning && node --no-warnings tests/batch.test.mjs",
     "test": "npm run test:ingest && npm run test:batch && npm run test:dash",
-    "test:dash": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild dash/src/index.ts --bundle --format=esm --platform=neutral --loader:.html=text --outfile=.wrangler/dash-test.mjs --log-level=warning && node --no-warnings tests/dash.test.mjs"
+    "test:dash": "esbuild src/index.ts --bundle --format=esm --platform=neutral --alias:cloudflare:workers=./tests/cf-workers-stub.mjs --outfile=.wrangler/bot-test.mjs --log-level=warning && esbuild dash/src/index.ts --bundle --format=esm --platform=neutral --main-fields=module,main --loader:.html=text --outfile=.wrangler/dash-test.mjs --log-level=warning && node --no-warnings tests/dash.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261123.1",
     "esbuild": "^0.24.2",
     "typescript": "^5.6.0",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^14.1.0"
   }
 }

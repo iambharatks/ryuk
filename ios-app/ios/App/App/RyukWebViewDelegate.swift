@@ -1,164 +1,117 @@
 import UIKit
 import WebKit
 import Capacitor
+import AuthenticationServices
+import Security
 
-/// Loads the Access-protected dashboard inside the WebView using a Cloudflare Access service token.
+/// Opens the dashboard; signs in with a passkey through Apple's sign-in sheet when needed.
 ///
 /// Flow:
-///  1. Capacitor boots on the local loader page (www/index.html). There is no server.url, so nothing races us.
-///  2. A native request with the CF-Access-Client-Id/Secret headers gets Access's CF_Authorization cookie.
-///  3. The cookie goes into the WebView's cookie store, then the dashboard loads (headers on that request too).
-///     Every later same-origin request (/api/..., /api/file/...) carries the cookie.
-///  4. Any navigation to *.cloudflareaccess.com (cookie expired) is cancelled and we re-authenticate,
-///     so the login flow can never reach Safari.
+///  1. Load the dashboard. With a live session cookie (the WebView keeps it, 30 days, renewed while used) it just opens.
+///  2. Signed out, the dashboard redirects to /login. The navigation guard cancels that and opens
+///     ASWebAuthenticationSession at /login?app=1&state=<random>: Ryuk's own page, Face ID, in Safari's context
+///     (passkeys work there without any app entitlement, so a free Apple ID is enough).
+///     While Cloudflare Access is still switched on, its Google sign-in runs in that sheet too; Google allows it there.
+///  3. The page finishes at ryuk://auth?code=…&state=…; the sheet hands that URL straight back to us (no other app sees it).
+///  4. We check the state, then load /auth/app/redeem?code=… in the WebView: the server swaps the one-time code
+///     (60 s, single use) for a session cookie.
 ///
-/// Credentials come from Info.plist ← ios/secrets.xcconfig (gitignored). Nothing secret lives in this file.
-final class RyukViewController: CAPBridgeViewController {
+/// No secret is compiled into the app.
+final class RyukViewController: CAPBridgeViewController, ASWebAuthenticationPresentationContextProviding {
 
     private let dashURL = URL(string: "https://ryuk-dash.iambharatks.workers.dev/")!
-    private let refreshAfter: TimeInterval = 15 * 60
-    private var lastAuth: Date?
-    private var lastAccessRedirect: Date?
-    private var authInFlight = false
+    private var authSession: ASWebAuthenticationSession?
+    private var pendingState: String?
     private var navGuard: NavigationGuard?
 
     // MARK: lifecycle
 
     override func viewDidLoad() {
-        super.viewDidLoad() // Capacitor loads the local loader page
+        super.viewDidLoad() // Capacitor shows the local loader page (www/index.html)
 
         if let webView = webView {
-            let guardDelegate = NavigationGuard(inner: webView.navigationDelegate) { [weak self] in
-                self?.accessRedirectIntercepted()
+            let guardDelegate = NavigationGuard(inner: webView.navigationDelegate, dashHost: dashURL.host ?? "") { [weak self] in
+                self?.signIn()
             }
             navGuard = guardDelegate          // navigationDelegate is weak
             webView.navigationDelegate = guardDelegate
-            // Retry button on the loader page → window.webkit.messageHandlers.ryukRetry.postMessage(1)
+            // "Try again" on the loader page → window.webkit.messageHandlers.ryukRetry.postMessage(1)
             webView.configuration.userContentController.add(RetryHandler { [weak self] in
-                self?.authenticate(load: true)
+                self?.openDashboard()
             }, name: "ryukRetry")
         }
-
-        NotificationCenter.default.addObserver(self, selector: #selector(willEnterForeground),
-                                               name: UIScene.willEnterForegroundNotification, object: nil)
-        authenticate(load: true)
+        openDashboard()
     }
 
-    @objc private func willEnterForeground() {
-        let onDashboard = webView?.url?.host == dashURL.host
-        if !onDashboard {
-            authenticate(load: true)
-        } else if lastAuth.map({ Date().timeIntervalSince($0) > refreshAfter }) ?? true {
-            authenticate(load: false) // silently refresh the cookie, keep the page as is
+    private func openDashboard() {
+        showStatus(nil)
+        _ = webView?.load(URLRequest(url: dashURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20))
+    }
+
+    // MARK: sign-in sheet
+
+    private func signIn() {
+        guard authSession == nil else { return }
+        let state = Self.randomState()
+        pendingState = state
+
+        var c = URLComponents(url: dashURL.appendingPathComponent("login"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "app", value: "1"), URLQueryItem(name: "state", value: state)]
+
+        let session = ASWebAuthenticationSession(url: c.url!, callbackURLScheme: "ryuk") { [weak self] callback, error in
+            DispatchQueue.main.async { self?.finishSignIn(callback: callback, error: error) }
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = true   // Face ID every time; nothing lingers in Safari
+        authSession = session
+        showStatus("Unlock with Face ID to open the notebook.", button: "Sign in")
+        if !session.start() {
+            authSession = nil
+            showStatus("Couldn't open the sign-in sheet.", button: "Try again")
         }
     }
 
-    private func accessRedirectIntercepted() {
-        // Guard against a loop if Access keeps rejecting us.
-        if let last = lastAccessRedirect, Date().timeIntervalSince(last) < 10 {
-            showStatus("Cloudflare Access keeps asking for login. Check the Service Auth policy and the token.")
+    private func finishSignIn(callback: URL?, error: Error?) {
+        authSession = nil
+        if let e = error as? ASWebAuthenticationSessionError, e.code == .canceledLogin {
+            showStatus("Sign-in cancelled.", button: "Sign in")
             return
         }
-        lastAccessRedirect = Date()
-        authenticate(load: true)
-    }
-
-    // MARK: auth
-
-    private func credential(_ key: String) -> String? {
-        guard let v = Bundle.main.object(forInfoDictionaryKey: key) as? String,
-              !v.isEmpty, !v.hasPrefix("$("), !v.hasPrefix("REPLACE") else { return nil }
-        return v
-    }
-
-    private func authorizedRequest(id: String, secret: String) -> URLRequest {
-        var req = URLRequest(url: dashURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-        req.setValue(id, forHTTPHeaderField: "CF-Access-Client-Id")
-        req.setValue(secret, forHTTPHeaderField: "CF-Access-Client-Secret")
-        return req
-    }
-
-    private func authenticate(load: Bool) {
-        guard !authInFlight else { return }
-        guard let id = credential("RyukCFClientId"), let secret = credential("RyukCFClientSecret") else {
-            showStatus("No service token in this build. Fill ios/secrets.xcconfig and rebuild.")
+        guard let url = callback,
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let code = items.first(where: { $0.name == "code" })?.value,
+              let state = items.first(where: { $0.name == "state" })?.value,
+              let expected = pendingState, state == expected else {
+            showStatus("Sign-in didn't finish (\(error?.localizedDescription ?? "no code came back")).", button: "Try again")
             return
         }
-        authInFlight = true
-        if load { showStatus(nil) }
-
-        let req = authorizedRequest(id: id, secret: secret)
-        let session = URLSession(configuration: .ephemeral, delegate: NoRedirects(), delegateQueue: nil)
-        session.dataTask(with: req) { [weak self] data, response, error in
-            session.finishTasksAndInvalidate()
-            DispatchQueue.main.async {
-                self?.handleAuth(request: req, data: data, response: response, error: error, load: load)
-            }
-        }.resume()
+        pendingState = nil
+        var c = URLComponents(url: dashURL.appendingPathComponent("auth/app/redeem"), resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "code", value: code)]
+        _ = webView?.load(URLRequest(url: c.url!)) // the response sets the session cookie and redirects to the dashboard
     }
 
-    private func handleAuth(request: URLRequest, data: Data?, response: URLResponse?, error: Error?, load: Bool) {
-        authInFlight = false
-
-        guard let http = response as? HTTPURLResponse else {
-            if load { showStatus("Can't reach the dashboard (\(error?.localizedDescription ?? "no response")). Check your connection.") }
-            return
-        }
-        guard http.statusCode == 200 else {
-            if load { showStatus(Self.explain(http, data)) }
-            return
-        }
-
-        var fields: [String: String] = [:]
-        for (k, v) in http.allHeaderFields { if let k = k as? String, let v = v as? String { fields[k] = v } }
-        let cookies = HTTPCookie.cookies(withResponseHeaderFields: fields, for: dashURL)
-        if !cookies.contains(where: { $0.name == "CF_Authorization" }) {
-            CAPLog.print("⚠️ Ryuk: Access returned no CF_Authorization cookie; API calls may fail")
-        }
-
-        guard let store = webView?.configuration.websiteDataStore.httpCookieStore else { return }
-        let group = DispatchGroup()
-        for cookie in cookies {
-            group.enter()
-            store.setCookie(cookie) { group.leave() }
-        }
-        group.notify(queue: .main) { [weak self] in
-            guard let self = self else { return }
-            self.lastAuth = Date()
-            if load { _ = self.webView?.load(request) } // cookie is set before this request leaves
-        }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        view.window ?? ASPresentationAnchor()
     }
 
-    private static func explain(_ http: HTTPURLResponse, _ data: Data?) -> String {
-        let code = http.statusCode
-        let location = http.value(forHTTPHeaderField: "Location") ?? ""
-        if (300..<400).contains(code), location.contains("cloudflareaccess.com") {
-            return "Access ignored the service token (redirected to login). Is the Service Auth policy attached to the ryuk-dash application?"
-        }
-        // The worker's own 403 is plain text "Forbidden (<reason>)" and reveals no values.
-        if code == 403, let data = data, data.count < 200,
-           let body = String(data: data, encoding: .utf8), body.hasPrefix("Forbidden (") {
-            return "The dashboard rejected the token: \(body). Set ALLOWED_SERVICE_TOKEN on ryuk-dash."
-        }
-        if code == 403 {
-            return "Cloudflare Access refused the token (HTTP 403). Check the token is current and the Service Auth policy includes it."
-        }
-        return "Unexpected response from the dashboard (HTTP \(code))."
+    private static func randomState() -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 
     // MARK: loader page status
 
-    private func showStatus(_ message: String?) {
+    /// Shows a message (and a button) on the local loader page; does nothing once the dashboard is showing.
+    private func showStatus(_ message: String?, button: String? = nil) {
         guard let webView = webView, webView.url?.host != dashURL.host else { return }
-        let arg: String
-        if let message = message,
-           let json = try? JSONSerialization.data(withJSONObject: [message]),
-           let s = String(data: json, encoding: .utf8) {
-            arg = String(s.dropFirst().dropLast()) // safely quoted JS string
-        } else {
-            arg = "null"
+        func quoted(_ s: String?) -> String {
+            guard let s = s, let data = try? JSONSerialization.data(withJSONObject: [s]), let j = String(data: data, encoding: .utf8) else { return "null" }
+            return String(j.dropFirst().dropLast()) // a safely quoted JS string
         }
-        webView.evaluateJavaScript("window.ryukStatus && window.ryukStatus(\(arg))", completionHandler: nil)
+        webView.evaluateJavaScript("window.ryukStatus && window.ryukStatus(\(quoted(message)), \(quoted(button)))", completionHandler: nil)
     }
 }
 
@@ -169,23 +122,18 @@ private final class RetryHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) { action() }
 }
 
-/// Don't follow redirects in the native auth request: a redirect means Access wants a login.
-private final class NoRedirects: NSObject, URLSessionTaskDelegate {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
-    }
-}
-
-/// Wraps Capacitor's navigation delegate. Navigations to Cloudflare Access are cancelled (and trigger
-/// re-auth) instead of letting Capacitor hand them to Safari. Everything else is forwarded untouched.
+/// Wraps Capacitor's navigation delegate. A main-frame navigation to the dashboard's /login (signed out) or to
+/// Cloudflare Access (while it is still on) is cancelled and becomes the sign-in sheet instead, so a login page
+/// never loads inside the app's WebView. Everything else is forwarded untouched.
 private final class NavigationGuard: NSObject, WKNavigationDelegate {
     private weak var inner: WKNavigationDelegate?
-    private let onAccessRedirect: () -> Void
+    private let dashHost: String
+    private let onSignIn: () -> Void
 
-    init(inner: WKNavigationDelegate?, onAccessRedirect: @escaping () -> Void) {
+    init(inner: WKNavigationDelegate?, dashHost: String, onSignIn: @escaping () -> Void) {
         self.inner = inner
-        self.onAccessRedirect = onAccessRedirect
+        self.dashHost = dashHost.lowercased()
+        self.onSignIn = onSignIn
     }
 
     override func responds(to aSelector: Selector!) -> Bool {
@@ -198,10 +146,14 @@ private final class NavigationGuard: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if let host = navigationAction.request.url?.host?.lowercased(),
-           host == "cloudflareaccess.com" || host.hasSuffix(".cloudflareaccess.com") {
+        let url = navigationAction.request.url
+        let host = url?.host?.lowercased() ?? ""
+        let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        let toLogin = host == dashHost && url?.path == "/login"
+        let toAccess = host == "cloudflareaccess.com" || host.hasSuffix(".cloudflareaccess.com")
+        if mainFrame && (toLogin || toAccess) {
             decisionHandler(.cancel)
-            DispatchQueue.main.async(execute: onAccessRedirect)
+            DispatchQueue.main.async(execute: onSignIn)
             return
         }
         let forwarded: Void? = inner?.webView?(webView, decidePolicyFor: navigationAction, decisionHandler: decisionHandler)

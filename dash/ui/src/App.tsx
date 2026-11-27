@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { KeyRound, RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
 import { Data, NewPin, Pin, apiAddPin, apiDeletePin, apiOrderPins, apiRow, demoData, fetchData } from "./data";
 import { DeathPage } from "./components/DeathPage";
@@ -13,6 +13,8 @@ import { AppleDrop, Ash, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } f
 import { lastDays } from "./data";
 import { Coin } from "./components/Coin";
 import { apiCoin, demoCoin } from "./coin";
+import { Keys } from "./components/Keys";
+import { watchSession } from "./auth";
 
 const VIEWS = ["Gaze", "Page", "Shelf", "Notebook", "Money", "Ledger", "Eyes"] as const;
 const VIEW_LABEL: Record<string, string> = { Gaze: "Gaze", Page: "Page", Shelf: "Shelf", Notebook: "Notebook", Money: "Money", Ledger: "Ledger", Eyes: "Eyes" };
@@ -20,6 +22,7 @@ type View = (typeof VIEWS)[number];
 
 // Demo data only on ?demo or when opened from a local file / localhost (never silently in production).
 const DEMO = import.meta.env.VITE_DEMO === "1" || /[?&]demo\b/.test(location.search) || ["localhost", "127.0.0.1", ""].includes(location.hostname);
+if (!DEMO) watchSession();     // a 401 anywhere means the session ended: back to the login page
 
 export default function App() {
   const [view, setView] = useState<View>(() => (VIEWS.find((v) => location.hash === "#" + v.toLowerCase()) ?? (location.hash === "#notepad" ? "Page" : "Gaze")));
@@ -32,6 +35,7 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [apple, setApple] = useState(0);
   const [eyesOpen, setEyesOpen] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
   const [opening, setOpening] = useState(false);
   const openNotebook = () => {
     setOpening(true);
@@ -130,6 +134,10 @@ export default function App() {
                 <span className="block font-mono text-[9.5px] uppercase tracking-[0.14em] text-slate">{OWNER.title}</span>
               </span>
             </span>
+            <button onClick={() => setKeysOpen(true)} aria-label="Keys: passkeys and sign out" title="Keys"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-hairline text-slate transition hover:border-hover hover:text-ink">
+              <KeyRound size={14} />
+            </button>
             <button onClick={() => setEyesOpen(true)} aria-label="Open the shinigami eyes (E)" title="Shinigami eyes (E)"
               className="group flex h-9 items-center justify-center rounded-full border border-apple/40 px-2.5 transition hover:border-apple hover:bg-apple/10">
               <ShinigamiEye size={15} />
@@ -181,6 +189,7 @@ export default function App() {
         </div>
       </main>
 
+      {keysOpen && <Keys demo={DEMO} onClose={() => setKeysOpen(false)} />}
       {data && <ShinigamiEyes open={eyesOpen} onClose={() => setEyesOpen(false)} data={data} />}
 
       <div role="status" style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))" }} className={`fixed left-1/2 z-50 -translate-x-1/2 rounded-full border border-hairline bg-raised px-4 py-2 font-mono text-[11px] text-ink transition-opacity ${toast ? "opacity-100" : "pointer-events-none opacity-0"}`}>{toast}</div>

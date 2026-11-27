@@ -10,7 +10,7 @@ iPhone Telegram ──webhook──▶ ryuk (Worker, src/index.ts) ──Gemini 
 iPhone bank SMS ──Shortcut POST /ingest/finance (Bearer INGEST_KEY)──▶ src/ingest.ts ──regex parser src/finance.ts──▶ D1 finance_log
 iPhone Health   ──Shortcut POST /ingest/health (Bearer HEALTH_KEY)──▶ src/health.ts ──plain code──▶ D1 health_log
 iPhone text     ──Shortcut POST /ingest/log    (X-Ryuk-Key = LOG_KEY)────▶ same Gemini path as Telegram
-Browser ──Cloudflare Access (Google login, one email)──▶ ryuk-dash (dash/src/index.ts) ──▶ D1
+Browser / iOS app ──passkey (Face ID) session──▶ ryuk-dash (dash/src/index.ts) ──▶ D1   (Access JWT also accepted while Access is on)
                                                          └─ Service Binding RPC BOT.capture() → ryuk
 Cron 30 16 * * * (22:00 IST) ──▶ daily summary to Telegram
 ```
@@ -25,15 +25,16 @@ Cron 30 16 * * * (22:00 IST) ──▶ daily summary to Telegram
 - Money (dashboard view, `dash/ui/src/components/Coin.tsx` + `dash/ui/src/coin.ts`, API `dash/src/coin.ts` under `/api/coin*`): finance kept apart from the daily logs. `src/classify.ts` files each transaction (your `finance_rules` first, then built-in keyword lists) into a category, or `investment` + an investment class (mutual_fund, stocks, gold, fd_rd, retirement, crypto…); runs at SMS ingest and on re-classify, plain code only. `category_src` = auto | rule | manual; manual is never overwritten. Budgets in `finance_budgets`. CSV/JSON export via `/api/coin/export` (formula cells defused, no SMS hash). Hand-added entries have `source='manual'`, no sms_hash.
 - Health: `src/health.ts` maps Shortcut keys (camelCase or snake_case, e.g. excerciseMinutes) to `health_log` columns via `KEY_MAP`; one row per IST day, later syncs fill in but never blank values.
 - Ingest auth: `Authorization: Bearer <key>` (X-Ryuk-Key also accepted), constant-time compare.
-- Dashboard worker: `dash/src/index.ts` (Access JWT verify, `/api/data`, `/api/row` PATCH/DELETE, `/api/pins`, `/api/capture`). Serves one inlined HTML file `dash/src/page.html`.
+- Dashboard login: `dash/src/auth.ts` + `dash/src/login.ts`: passkeys only (WebAuthn via @simplewebauthn/server). Session cookie `__Host-ryuk` (HttpOnly, Secure, SameSite=Lax, 30 days sliding; only its SHA-256 stored in `auth_sessions`). First passkey: from an Access-signed-in session or with secret AUTH_SETUP_CODE while none exists. iOS app: ASWebAuthenticationSession → /login?app=1&state → ryuk://auth?code (60 s, one use) → /auth/app/redeem sets the cookie. Writes from another Origin are refused. Service tokens are NOT accepted.
+- Dashboard worker: `dash/src/index.ts` (passkey session or Access JWT, `/api/data`, `/api/row` PATCH/DELETE, `/api/pins`, `/api/capture`). Serves one inlined HTML file `dash/src/page.html`.
 - UI: `dash/ui/` React 18 + Vite + Tailwind 3 + lucide-react, built to a single file (vite-plugin-singlefile). Death Note–inspired original theme ("Obsidian Archive").
 - Schema: `schema.sql` (idempotent `CREATE ... IF NOT EXISTS`). Tables: messages, strength, cardio (pace in sec/km, cadence, HR, splits), meals (kcal + macro estimates), water, sleep, time_log, checkins, body, notes, pins, finance_log (+ category, invest_class, category_src, note), finance_rules, finance_budgets, health_log, batch_lines, live_session, live_lines (one row per IST day, upserted). Both workers share D1 database `ryuk`.
 
 ## Hard rules (do not break)
 1. **Financial and Apple Health data never go to Gemini, Telegram, logs, or any third party.** Finance alerts to Telegram carry no amount/merchant. Each Shortcut source has its own key.
 2. Store the minimum: never full account/card numbers, OTPs, PINs, passwords. Keep last 4 only; never store SMS text (finance_log keeps parsed fields only).
-3. **Secrets only via `npx wrangler secret put`.** Never write keys/tokens into `wrangler.toml`, code, tests, or commits (a leaked Gemini key already hit GitHub push protection once). Secrets: TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, INGEST_KEY, HEALTH_KEY, LOG_KEY.
-4. Every new endpoint must be authenticated (Telegram secret_token + OWNER_CHAT_ID, X-Ryuk-Key constant-time compare, or Access JWT). Never weaken CSP or Access checks.
+3. **Secrets only via `npx wrangler secret put`.** Never write keys/tokens into `wrangler.toml`, code, tests, or commits (a leaked Gemini key already hit GitHub push protection once). Secrets: TELEGRAM_TOKEN, WEBHOOK_SECRET, GEMINI_API_KEY, INGEST_KEY, HEALTH_KEY, LOG_KEY; dashboard (optional): AUTH_SETUP_CODE.
+4. Every new endpoint must be authenticated (Telegram secret_token + OWNER_CHAT_ID, X-Ryuk-Key constant-time compare, or the dashboard's passkey session / Access JWT). Never weaken CSP or the auth checks.
 5. Never run remote destructive SQL (`DROP`, `DELETE`, `--remote` schema changes) or deploy without asking the user first.
 6. Stay on free tiers (Workers Free, D1 Free: 7-day Time Travel; Gemini free RPD). Flag anything that would cost money.
 

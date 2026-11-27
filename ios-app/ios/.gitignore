@@ -12,5 +12,5 @@ capacitor-cordova-ios-plugins
 App/App/capacitor.config.json
 App/App/config.xml
 
-# Cloudflare Access service token (never commit)
+# no longer used (the app signs in with a passkey), but never commit one if it lingers
 secrets.xcconfig

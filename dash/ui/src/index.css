@@ -584,7 +584,36 @@ tr.erasing td { text-decoration: line-through; text-decoration-color: #C84B31; t
 .sticky-pop { animation: stickyPop .2s ease-out backwards; }
 @keyframes stickyPop { from { opacity: 0; transform: rotate(var(--tilt, 0deg)) scale(.8); } }
 .sticky-leave { animation: stickyLeave .15s ease-in forwards; pointer-events: none; }
-/* free board: notes sit where you dropped them; they may overlap */
+/* free board: notes sit where you dropped them; they may overlap; a note is as big as its words */
+.sticky-note.is-placed { height: auto; display: flex; flex-direction: column; }
+.sticky-note.is-placed .sticky-text { height: auto; flex: 1 1 auto; padding: 2px 4px; }
+.sticky-note.is-long .sticky-text { font-size: 15px; line-height: 1.18; }
+@media (max-width: 640px) { .sticky-note.is-long .sticky-text { font-size: 13.5px; } }
+.is-writing-note .sticky-input { height: auto; min-height: 2.6em; flex: 1 1 auto; overflow: hidden; }
+.is-writing-note.is-long .sticky-input { font-size: 15px; }
+.sticky-count { position: absolute; right: 8px; bottom: 5px; font-family: "JetBrains Mono", monospace; font-size: 9.5px; color: rgba(26,26,46,.5); }
+/* picked up (a touch hold): it lifts so you know it will follow your finger */
+.sticky-note.is-armed { transform: rotate(calc(var(--tilt, 0deg) + 1.5deg)) scale(1.05); transition: transform .15s ease-out;
+  box-shadow: 0 2px 2px rgba(0,0,0,.25), 0 20px 26px -12px rgba(0,0,0,.85); }
+html.is-dragging-something, html.is-dragging-something * { -webkit-user-select: none !important; user-select: none !important; cursor: grabbing !important; }
+
+/* the pad of sticky notes beside the title: tap it and the top sheet peels off */
+.sticky-pad { position: relative; width: 40px; height: 40px; flex: none; transform: rotate(-4deg); cursor: pointer; }
+@media (pointer: coarse) { .sticky-pad { width: 44px; height: 44px; } }
+.sticky-pad:disabled { opacity: .35; cursor: not-allowed; }
+.pad-sheet { position: absolute; inset: 0; border-radius: 2px; box-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.pad-base { box-shadow: 0 1px 0 rgba(0,0,0,.3), 0 8px 12px -6px rgba(0,0,0,.85); }
+.pad-top { transform-origin: 50% 0%; transition: transform .2s ease;
+  background-image: linear-gradient(135deg, transparent 72%, rgba(0,0,0,.10) 72%, rgba(255,255,255,.25) 86%, rgba(0,0,0,.05) 100%) !important; background-blend-mode: normal; }
+.pad-glue { position: absolute; inset: 0 0 auto 0; height: 6px; background: rgba(0,0,0,.07); border-radius: 2px 2px 0 0; }
+@media (hover: hover) { .sticky-pad:not(:disabled):hover .pad-top { transform: perspective(160px) rotateX(-14deg); } }
+.sticky-pad:focus-visible { outline: 2px solid rgba(200,75,49,.7); outline-offset: 4px; }
+.sticky-pad.is-pulling .pad-top { animation: padPull .33s cubic-bezier(.4,0,.6,1) forwards; }
+@keyframes padPull {
+  0%   { transform: none; }
+  40%  { transform: perspective(160px) rotateX(-32deg) translateY(-2px); }
+  100% { transform: translate(16px, -30px) rotate(-18deg); opacity: 0; }
+}
 .goals-field { position: relative; min-height: 112px; transition: height .2s ease; }
 .sticky-note.is-placed { position: absolute; cursor: grab; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .sticky-note.is-placed .sticky-text { cursor: inherit; }
@@ -666,6 +695,7 @@ tr.erasing td { text-decoration: line-through; text-decoration-color: #C84B31; t
 .poster-leave { animation: posterLeave .26s ease-in forwards; pointer-events: none; }
 /* moving a pin: it lifts off as a ghost under your finger; its old spot shows where it will land */
 .poster { cursor: grab; touch-action: manipulation; -webkit-user-drag: none; }
+.poster-armed { transform: rotate(calc(var(--tilt, 0deg) + 1deg)) scale(1.035); transition: transform .15s ease-out; box-shadow: 0 24px 40px -18px rgba(0,0,0,.95); }
 .poster-placeholder { opacity: .18; outline: 1.5px dashed rgba(236,229,211,.5); outline-offset: 4px; }
 .poster-ghost { position: fixed; z-index: 70; margin: 0; pointer-events: none; cursor: grabbing;
   transform: rotate(calc(var(--tilt, 0deg) + 2deg)) scale(1.04); box-shadow: 0 30px 50px -18px rgba(0,0,0,.95); }
@@ -675,6 +705,7 @@ tr.erasing td { text-decoration: line-through; text-decoration-color: #C84B31; t
   .sticky-note, .poster { transition: none !important; }
   .sticky-pop, .sticky-leave, .poster-tack, .poster-leave, .vital-pop, .sticky-strike path, .sticky-scrap { animation: none !important; }
   .sticky-tear { animation: none !important; opacity: 0; }
+  .sticky-pad.is-pulling .pad-top { animation: none !important; opacity: 0; }
   .sticky-strike path { stroke-dashoffset: 0; }
   .sticky-leave, .poster-leave { opacity: 0; }
 }

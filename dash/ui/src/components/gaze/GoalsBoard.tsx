@@ -1,31 +1,49 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Plus } from "lucide-react";
 import type { Goal, GoalPatch, Store } from "../../store";
 import { pressDrag } from "./drag";
 
 const MAX_ON_BOARD = 24;
-type Box = { left: number; top: number };
+const MAX_TEXT = 160;
+const COLORS = ["#f5e6a3", "#f5c6c6", "#c6d8f5", "#c6f5d0"];     // same order the server hands them out
+type Box = { left: number; top: number; w: number; h: number };
+type M = { nw: number; nh: number; gx: number; gy: number; small: boolean };
 
-/** Note size and spacing for the board's width. */
-const metrics = (w: number) => (w < 560 ? { nw: 112, nh: 100, gx: 12, gy: 18 } : { nw: 140, nh: 120, gx: 18, gy: 24 });
+/** Base note size and spacing for the board's width. */
+const metrics = (w: number): M => (w < 560 ? { nw: 112, nh: 100, gx: 12, gy: 18, small: true } : { nw: 140, nh: 120, gx: 18, gy: 24, small: false });
+
+/** A note grows with its words: wider first, then taller. Short notes stay the classic square. */
+function sizeFor(text: string, m: M, W: number) {
+  const len = text.length;
+  const k = len <= 26 ? 1 : len <= 55 ? 1.22 : len <= 95 ? 1.42 : 1.6;
+  const w = Math.min(Math.round(m.nw * k), Math.max(m.nw, W));
+  const charW = m.small ? 7.6 : 8.6, lineH = m.small ? 18 : 20.5;
+  const perLine = Math.max(6, Math.floor((w - 26) / charW));
+  const lines = Math.ceil(len / perLine) + (len > perLine ? 1 : 0);       // a spare line for word wrap
+  return { w, h: Math.max(m.nh, Math.round(lines * lineH + 36)) };
+}
+
+const overlaps = (a: Box, b: Box, pad = 6) => a.left < b.left + b.w + pad && b.left < a.left + a.w + pad && a.top < b.top + b.h + pad && b.top < a.top + a.h + pad;
 
 /**
  * Sticky notes on a corkboard. A note stays from the day it is written until it is kept; a kept note stays
  * (struck through) for the rest of that day, then it is gone. Tear one off to remove it now.
- * Drag a note anywhere: notes may overlap, the one you moved last sits on top. Where you leave it is saved.
+ * Pull a new note off the pad. Drag a note anywhere (hold first on a phone): notes may overlap and the one you
+ * moved last sits on top. Where you leave it is saved.
  */
 export function GoalsBoard({ store }: { store: Store }) {
   const [goals, setGoals] = useState<Goal[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [draft, setDraft] = useState("");
   const [fresh, setFresh] = useState<Set<number>>(new Set());
   const [tearing, setTearing] = useState<Set<number>>(new Set());
   const [scraps, setScraps] = useState<{ id: number; left: number; top: number; color: string }[]>([]);
-  const [drag, setDrag] = useState<{ id: number } & Box | null>(null);
+  const [drag, setDrag] = useState<{ id: number; left: number; top: number } | null>(null);
+  const [armed, setArmed] = useState<number | null>(null);
   const [err, setErr] = useState("");
   const saving = useRef(false);
 
-  // the board's width decides note size and where unplaced notes go
+  // the board's width decides note size and where unmoved notes go
   const field = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(0);
   useLayoutEffect(() => {
@@ -41,30 +59,63 @@ export function GoalsBoard({ store }: { store: Store }) {
   useEffect(() => { store.goals().then(setGoals).catch((e) => { setErr((e as Error).message); setGoals([]); }); }, [store]);
 
   const list = goals ?? [];
-  const { nw, nh, gx, gy } = metrics(W || 800);
-  const span = Math.max(0, W - nw);
+  const m = metrics(W || 800);
+  const nextColor = COLORS[list.length % COLORS.length];
 
-  // placed notes where you left them; the rest fill free slots in a grid, left to right
+  // real heights once rendered (fonts differ a little from the estimate)
+  const els = useRef(new Map<number, HTMLElement>());
+  const [measured, setMeasured] = useState<Record<number, number>>({});
+  useLayoutEffect(() => {
+    let next: Record<number, number> | null = null;
+    els.current.forEach((el, id) => { const h = el.offsetHeight; if (h && Math.abs((measured[id] ?? 0) - h) > 1) (next ??= { ...measured })[id] = h; });
+    if (next) setMeasured(next);
+  });
+
+  // moved notes where you left them; the rest flow left to right around them
   const boxes = useMemo(() => {
     const out = new Map<number, Box>();
-    const placed: Box[] = [];
-    for (const g of list) if (g.x != null && g.y != null) { const b = { left: g.x * span, top: g.y }; out.set(g.id, b); placed.push(b); }
-    const cols = Math.max(1, Math.floor((W + gx) / (nw + gx)));
-    const pad = Math.max(0, (W - (cols * nw + (cols - 1) * gx)) / 2);     // centre the grid of unmoved notes
-    const free = (b: Box) => placed.every((p) => Math.abs(p.left - b.left) > nw * 0.6 || Math.abs(p.top - b.top) > nh * 0.6);
-    let s = 0;
-    const next = () => { for (;; s++) { const b = { left: pad + (s % cols) * (nw + gx), top: Math.floor(s / cols) * (nh + gy) + 6 }; if (free(b)) { s++; return b; } } };
-    for (const g of list) if (!out.has(g.id)) { const b = next(); out.set(g.id, b); placed.push(b); }
-    return { out, newSlot: next() };
-  }, [list, W, span, nw, nh, gx, gy]);
+    const taken: Box[] = [];
+    const size = (g: Goal) => { const s = sizeFor(g.text, m, W || 800); return { w: s.w, h: measured[g.id] ?? s.h }; };
+    for (const g of list) if (g.x != null && g.y != null) {
+      const s = size(g); const b = { left: g.x * Math.max(0, W - s.w), top: g.y, ...s };
+      out.set(g.id, b); taken.push(b);
+    }
+    const cols = Math.max(1, Math.floor((W + m.gx) / (m.nw + m.gx)));
+    const x0 = Math.max(0, (W - (cols * m.nw + (cols - 1) * m.gx)) / 2);
+    let x = x0, y = 6, rowH = 0;
+    const place = (w: number, h: number): Box => {
+      for (let guard = 0; guard < 2000; guard++) {
+        if (x + w > W + 0.5 && x > x0) { x = x0; y += rowH + m.gy; rowH = 0; }
+        const b = { left: Math.min(x, Math.max(0, W - w)), top: y, w, h };
+        const hit = taken.find((t) => overlaps(t, b));
+        if (!hit) { x += w + m.gx; rowH = Math.max(rowH, h); taken.push(b); return b; }
+        x = Math.max(x + 24, hit.left + hit.w + m.gx);
+      }
+      return { left: 0, top: y, w, h };
+    };
+    for (const g of list) if (!out.has(g.id)) { const s = size(g); out.set(g.id, place(s.w, s.h)); }
+    const ns = sizeFor(draft || "a goal…", m, W || 800);
+    return { out, newSlot: place(ns.w, ns.h) };
+  }, [list, W, m.nw, m.nh, m.gx, m.gy, measured, draft]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const bottom = Math.max(nh + 12, ...[...boxes.out.values()].map((b) => b.top + nh + 14), adding ? boxes.newSlot.top + nh + 14 : 0, drag ? drag.top + nh + 14 : 0);
-  const topZ = list.reduce((m, g) => Math.max(m, g.z ?? 0), 0);
+  const allBoxes = [...boxes.out.values()];
+  const dragBox = drag ? boxes.out.get(drag.id) : null;
+  const bottom = Math.max(m.nh + 12, ...allBoxes.map((b) => b.top + b.h + 14), adding ? boxes.newSlot.top + boxes.newSlot.h + 14 : 0, drag && dragBox ? drag.top + dragBox.h + 14 : 0);
+  const topZ = list.reduce((mx, g) => Math.max(mx, g.z ?? 0), 0);
 
   const patch = async (g: Goal, p: GoalPatch, local: Partial<Goal>) => {
     setGoals((gs) => gs!.map((x) => (x.id === g.id ? { ...x, ...local } : x)));
     try { await store.editGoal(g.id, p); setErr(""); }
     catch (e) { setErr((e as Error).message); setGoals((gs) => gs!.map((x) => (x.id === g.id ? g : x))); }
+  };
+
+  // pull a sheet off the pad, then write on it
+  const pull = () => {
+    if (pulling || adding || goals == null) return;
+    if (list.length >= MAX_ON_BOARD) { setErr(`The board holds ${MAX_ON_BOARD} notes. Tear one off first.`); return; }
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setPulling(true);
+    setTimeout(() => { setPulling(false); setAdding(true); }, reduce ? 0 : 330);
   };
 
   const save = async () => {
@@ -89,7 +140,7 @@ export function GoalsBoard({ store }: { store: Store }) {
   const tear = (g: Goal) => {
     const b = boxes.out.get(g.id)!;
     setTearing((s) => new Set(s).add(g.id));
-    setScraps((s) => [...s, { id: g.id, left: b.left + nw / 2 - 15, top: b.top - 5, color: g.color ?? "#f5e6a3" }]);
+    setScraps((s) => [...s, { id: g.id, left: b.left + b.w / 2 - 15, top: b.top - 5, color: g.color ?? COLORS[0] }]);
     setTimeout(() => setScraps((s) => s.filter((x) => x.id !== g.id)), 1600);
     setTimeout(async () => {
       try { await store.deleteGoal(g.id); setGoals((gs) => gs!.filter((x) => x.id !== g.id)); }
@@ -100,20 +151,22 @@ export function GoalsBoard({ store }: { store: Store }) {
 
   const startDrag = (e: React.PointerEvent, g: Goal) => {
     const from = boxes.out.get(g.id)!;
-    const maxTop = bottom + nh;     // you can pull a note a little below the last one; the board grows
-    let last: Box = from;
+    const maxLeft = Math.max(0, W - from.w), maxTop = bottom + m.nh;   // a little room below: the board grows
+    let last = { left: from.left, top: from.top };
     pressDrag(e, {
-      onStart: () => { setDrag({ id: g.id, ...from }); setGoals((gs) => gs!.map((x) => (x.id === g.id ? { ...x, z: topZ + 1 } : x))); },
-      onMove: (dx, dy) => { last = { left: Math.min(span, Math.max(0, from.left + dx)), top: Math.min(maxTop, Math.max(0, from.top + dy)) }; setDrag({ id: g.id, ...last }); },
+      onArm: () => setArmed(g.id),
+      onCancel: () => setArmed(null),
+      onStart: () => { setArmed(null); setDrag({ id: g.id, left: from.left, top: from.top }); setGoals((gs) => gs!.map((x) => (x.id === g.id ? { ...x, z: topZ + 1 } : x))); },
+      onMove: (dx, dy) => { last = { left: Math.min(maxLeft, Math.max(0, from.left + dx)), top: Math.min(maxTop, Math.max(0, from.top + dy)) }; setDrag({ id: g.id, ...last }); },
       onEnd: () => {
-        setDrag(null);
-        const fx = (left: number) => (span ? Math.round((Math.min(span, left) / span) * 1000) / 1000 : 0);
-        const x = fx(last.left), y = Math.round(last.top);
-        // Pin every note that was still auto-placed to where it stands now. Otherwise the auto layout, which steers
-        // clear of placed notes, would push the note you just dropped onto out of the way.
+        setDrag(null); setArmed(null);
+        const fx = (left: number, w: number) => { const span = Math.max(0, W - w); return span ? Math.round((Math.min(span, left) / span) * 1000) / 1000 : 0; };
+        const x = fx(last.left, from.w), y = Math.round(last.top);
+        // Pin every note that was still flowing to where it stands now, so the flow can't push them around
+        // when this one lands on top of them.
         const frozen = list.filter((o) => o.id !== g.id && (o.x == null || o.y == null)).map((o) => {
           const b = boxes.out.get(o.id)!;
-          return { o, x: fx(b.left), y: Math.round(b.top) };
+          return { o, x: fx(b.left, b.w), y: Math.round(b.top) };
         });
         setGoals((gs) => gs!.map((o) => {
           if (o.id === g.id) return { ...o, x, y, z: topZ + 1 };
@@ -123,7 +176,7 @@ export function GoalsBoard({ store }: { store: Store }) {
         Promise.all([
           store.editGoal(g.id, { x, y, z: topZ + 1 }),
           ...frozen.map((f) => store.editGoal(f.o.id, { x: f.x, y: f.y })),
-        ]).then(() => setErr("")).catch((e) => setErr((e as Error).message));
+        ]).then(() => setErr("")).catch((er) => setErr((er as Error).message));
       },
     });
   };
@@ -134,31 +187,30 @@ export function GoalsBoard({ store }: { store: Store }) {
       <div className="mb-3 flex items-end justify-between gap-3">
         <div>
           <div className="eyebrow">Names for today</div>
-          <div className="mt-1 flex items-center gap-3">
+          <div className="mt-1 flex items-center gap-4">
             <h2 className="font-serif text-[26px] leading-none text-ink">The board</h2>
-            <button onClick={() => setAdding(true)} disabled={goals == null || list.length >= MAX_ON_BOARD || adding}
-              aria-label="Write a sticky note" title={list.length >= MAX_ON_BOARD ? `The board holds ${MAX_ON_BOARD}. Tear one off first` : "Write a sticky note"}
-              className="flex h-11 w-11 items-center justify-center rounded-full border border-apple/40 text-ink transition hover:border-apple hover:bg-apple/10 disabled:opacity-30 md:h-8 md:w-8">
-              <Plus size={16} />
-            </button>
+            <StickyPad color={nextColor} under={[COLORS[(list.length + 1) % 4], COLORS[(list.length + 2) % 4]]} pulling={pulling}
+              disabled={goals == null || adding || list.length >= MAX_ON_BOARD} onPull={pull} />
           </div>
         </div>
         <div className="text-right">
           {list.length > 0 && <div className="font-mono text-[11px] tabular-nums text-slate">{kept} of {list.length} kept</div>}
-          <div className="hidden font-mono text-[10px] text-slate-dim md:block">drag to move · tap to keep</div>
+          <div className="font-mono text-[10px] text-slate-dim"><span className="hidden md:inline">drag to move · tap to keep</span><span className="md:hidden">hold to move · tap to keep</span></div>
         </div>
       </div>
       <div className="cork-board">
         <div ref={field} className="goals-field" style={{ height: bottom }}>
           {goals == null && <p className="py-8 text-center font-mono text-[11px] text-[#c9b48c]/70">pinning the notes…</p>}
-          {list.map((g, i) => {
-            const b = drag?.id === g.id ? drag : boxes.out.get(g.id)!;
+          {list.map((g) => {
+            const b = boxes.out.get(g.id)!;
+            const at = drag?.id === g.id ? drag : b;
             const carried = !g.done && g.date < todayIST();
             return (
               <div key={g.id} role="group" aria-label={g.text}
-                className={`sticky-note is-placed ${fresh.has(g.id) ? "sticky-pop" : ""} ${tearing.has(g.id) ? "sticky-tear" : ""} ${g.done ? "is-done" : ""} ${drag?.id === g.id ? "is-dragging" : ""}`}
-                style={{ left: b.left, top: b.top, width: nw, height: nh, zIndex: drag?.id === g.id ? 9999 : (g.z ?? 0) + 1,
-                  background: g.color ?? "#f5e6a3", ["--tilt" as any]: `${g.rotation ?? 0}deg` }}
+                ref={(el) => { if (el) els.current.set(g.id, el); else els.current.delete(g.id); }}
+                className={`sticky-note is-placed ${g.text.length > 95 ? "is-long" : ""} ${fresh.has(g.id) ? "sticky-pop" : ""} ${tearing.has(g.id) ? "sticky-tear" : ""} ${g.done ? "is-done" : ""} ${drag?.id === g.id ? "is-dragging" : ""} ${armed === g.id ? "is-armed" : ""}`}
+                style={{ left: at.left, top: at.top, width: b.w, minHeight: m.nh, zIndex: drag?.id === g.id ? 9999 : (g.z ?? 0) + 1,
+                  background: g.color ?? COLORS[0], ["--tilt" as any]: `${g.rotation ?? 0}deg` }}
                 onPointerDown={(e) => startDrag(e, g)}>
                 <span className="sticky-pin" aria-hidden="true" />
                 <button className="sticky-text" onClick={() => toggle(g)} aria-pressed={!!g.done} title={g.done ? "Kept. Tap to undo" : "Tap when kept · drag to move"}>
@@ -182,21 +234,37 @@ export function GoalsBoard({ store }: { store: Store }) {
             <span key={s.id} className="sticky-scrap" style={{ left: s.left, top: s.top, background: s.color }} aria-hidden="true"><span className="sticky-pin" /></span>
           ))}
           {adding && (
-            <div className="sticky-note is-placed sticky-pop" style={{ left: boxes.newSlot.left, top: boxes.newSlot.top, width: nw, height: nh, zIndex: 10000, background: "#f5e6a3", ["--tilt" as any]: "0deg" }}>
+            <div className={`sticky-note is-placed is-writing-note sticky-pop ${draft.length > 95 ? "is-long" : ""}`}
+              style={{ left: boxes.newSlot.left, top: boxes.newSlot.top, width: boxes.newSlot.w, minHeight: boxes.newSlot.h, zIndex: 10000, background: nextColor, ["--tilt" as any]: "0deg" }}>
               <span className="sticky-pin" aria-hidden="true" />
-              <textarea autoFocus value={draft} maxLength={60} rows={3} aria-label="New goal"
+              <textarea autoFocus value={draft} maxLength={MAX_TEXT} rows={2} aria-label="New goal"
+                ref={(el) => { if (el) { el.style.height = "0px"; el.style.height = `${el.scrollHeight}px`; } }}
                 onChange={(e) => setDraft(e.target.value.replace(/\n/g, ""))}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } if (e.key === "Escape") { setDraft(""); setAdding(false); } }}
                 onBlur={save} placeholder="a goal…" className="sticky-input" />
+              {draft.length > MAX_TEXT - 30 && <span className="sticky-count">{MAX_TEXT - draft.length}</span>}
             </div>
           )}
           {goals != null && !list.length && !adding && (
-            <button onClick={() => setAdding(true)} className="absolute inset-0 flex items-center justify-center font-hand text-[18px] text-[#c9b48c]/80">An empty board. Tap to write what today is for.</button>
+            <button onClick={pull} className="absolute inset-0 flex items-center justify-center px-6 text-center font-hand text-[18px] text-[#c9b48c]/80">An empty board. Pull a note off the pad and write what today is for.</button>
           )}
         </div>
       </div>
       {err && <p role="alert" className="mt-2 font-mono text-[11px] text-apple">{err}</p>}
     </section>
+  );
+}
+
+/** A little pad of sticky notes; the top sheet is the next note's colour and peels off when tapped. */
+function StickyPad({ color, under, pulling, disabled, onPull }: { color: string; under: string[]; pulling: boolean; disabled: boolean; onPull: () => void }) {
+  return (
+    <button type="button" onClick={onPull} disabled={disabled} className={`sticky-pad ${pulling ? "is-pulling" : ""}`}
+      aria-label="Pull a new sticky note off the pad" title={disabled ? "The board is full. Tear a note off first" : "Pull a new note"}>
+      <span className="pad-sheet" style={{ background: under[1], transform: "translate(3px, 4px) rotate(3deg)" }} />
+      <span className="pad-sheet" style={{ background: under[0], transform: "translate(1.5px, 2px) rotate(1.5deg)" }} />
+      <span className="pad-sheet pad-base" style={{ background: color }} />
+      <span key={String(pulling)} className="pad-sheet pad-top" style={{ background: color }}><span className="pad-glue" /></span>
+    </button>
   );
 }
 

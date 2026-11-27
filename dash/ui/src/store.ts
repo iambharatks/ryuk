@@ -204,7 +204,7 @@ export function demoStore(): Store {
       await wait(150);
       const n = goals.filter((g) => onBoard(g, date)).length;
       if (n >= 24) throw new Error("the board holds 24 notes; tear one off first");
-      const g: Goal = { id: nextId++, date, text: text.slice(0, 80), done: 0, color: STICKY[n % 4], rotation: seedTilt(text + n), position: n + 1, created_at: new Date().toISOString(), done_at: null, x: null, y: null, z: null };
+      const g: Goal = { id: nextId++, date, text: text.slice(0, 160), done: 0, color: STICKY[n % 4], rotation: seedTilt(text + n), position: n + 1, created_at: new Date().toISOString(), done_at: null, x: null, y: null, z: null };
       goals.push(g); return clone(g);
     },
     async editGoal(id, patch) {

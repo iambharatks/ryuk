@@ -115,6 +115,7 @@ export function PinWall({ pins, onAdd, onDelete, onOrder, upload, demo }: {
   }, [layoutKey]);
 
   // dragging: the pin follows your finger as a ghost; its spot on the wall shows where it will land
+  const [armedPin, setArmedPin] = useState<number | null>(null);
   const [ghost, setGhost] = useState<{ id: number; x: number; y: number; w: number; ox: number; oy: number } | null>(null);
   const startDrag = (e: React.PointerEvent, id: number) => {
     const el = tiles.current.get(id);
@@ -124,7 +125,9 @@ export function PinWall({ pins, onAdd, onDelete, onOrder, upload, demo }: {
     const start = order;
     let cur = order, over: number | null = null;
     pressDrag(e, {
-      onStart: () => { setMenu(null); setLive(start); setGhost({ id, x: r.left, y: r.top, w: r.width, ox, oy }); },
+      onArm: () => setArmedPin(id),
+      onCancel: () => setArmedPin(null),
+      onStart: () => { setArmedPin(null); setMenu(null); setLive(start); setGhost({ id, x: r.left, y: r.top, w: r.width, ox, oy }); },
       onMove: (_dx, _dy, x, y) => {
         setGhost((g) => g && { ...g, x: x - ox, y: y - oy });
         const hit = document.elementsFromPoint(x, y).map((n) => (n as HTMLElement).closest?.("[data-pin-id]") as HTMLElement | null).find((n) => n && Number(n.dataset.pinId) !== id);
@@ -137,7 +140,7 @@ export function PinWall({ pins, onAdd, onDelete, onOrder, upload, demo }: {
         setLive(cur);
       },
       onEnd: () => {
-        setGhost(null); setLive(null);
+        setGhost(null); setLive(null); setArmedPin(null);
         if (cur.join() !== start.join()) onOrder([...cur, ...pins.slice(MAX_ON_WALL).map((p) => p.id)]);
       },
       onHold: (x, y) => setMenu({ id, x, y }),
@@ -200,7 +203,7 @@ export function PinWall({ pins, onAdd, onDelete, onOrder, upload, demo }: {
                 return (
                   <figure key={p.id} data-pin-id={p.id}
                     ref={(el) => { if (el) tiles.current.set(p.id, el); else tiles.current.delete(p.id); }}
-                    className={`poster group ${p.image_url ? "" : "poster-quote"} ${isNew ? "poster-tack" : ""} ${leaving.has(p.id) ? "poster-leave" : ""} ${ghost?.id === p.id ? "poster-placeholder" : ""}`}
+                    className={`poster group ${p.image_url ? "" : "poster-quote"} ${isNew ? "poster-tack" : ""} ${leaving.has(p.id) ? "poster-leave" : ""} ${ghost?.id === p.id ? "poster-placeholder" : ""} ${armedPin === p.id ? "poster-armed" : ""}`}
                     style={{ ["--tilt" as any]: tilt(p.id) }}
                     onPointerDown={(e) => startDrag(e, p.id)}
                     onContextMenu={(e) => { e.preventDefault(); setMenu({ id: p.id, x: e.clientX, y: e.clientY }); }}>

@@ -32,7 +32,7 @@ export async function listGoals(env: ExtraEnv, day: string | null) {
 }
 
 export async function addGoal(env: ExtraEnv, body: any) {
-  const text = String(body?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+  const text = String(body?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
   if (!text) return json({ error: "a goal needs words" }, 400);
   const date = body?.date == null ? istDay() : body.date;
   if (!isDay(date)) return json({ error: "bad date" }, 400);
@@ -55,7 +55,7 @@ export async function editGoal(env: ExtraEnv, id: number, body: any) {
   if (body?.y !== undefined) { if (body.y !== null && !num(body.y, 0, 20000)) return json({ error: "y must be 0..20000" }, 400); sets.push("y = ?"); vals.push(body.y); }
   if (body?.z !== undefined) { if (!Number.isInteger(body.z) || body.z < 0 || body.z > 1e6) return json({ error: "z must be a whole number" }, 400); sets.push("z = ?"); vals.push(body.z); }
   if (body?.text != null) {
-    const text = String(body.text).replace(/\s+/g, " ").trim().slice(0, 80);
+    const text = String(body.text).replace(/\s+/g, " ").trim().slice(0, 160);
     if (!text) return json({ error: "a goal needs words" }, 400);
     sets.push("text = ?"); vals.push(text);
   }

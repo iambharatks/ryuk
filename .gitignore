@@ -10,3 +10,6 @@ dash/ui/dist-demo/
 backup-*.sql
 *.age
 .claude/settings.local.json
+
+# local credentials (Access service token etc.) - never commit
+.local/

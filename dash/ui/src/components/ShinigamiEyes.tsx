@@ -89,7 +89,7 @@ export function ShinigamiEyes({ open, onClose, data }: { open: boolean; onClose:
         <div className={`eyes-bg absolute inset-0 overflow-y-auto ${phase === "closing" ? "eyes-out" : "eyes-in"}`}>
           <div className="scanlines pointer-events-none fixed inset-0" />
           <div className="scanbar pointer-events-none fixed inset-x-0 top-0 h-40" />
-          <div className="relative mx-auto max-w-[1300px] px-5 pb-20 pt-6 md:px-10">
+          <div className="relative mx-auto max-w-[1300px] px-5 pb-20 pt-6 md:px-10" style={{ paddingTop: "calc(1.5rem + env(safe-area-inset-top))", paddingBottom: "calc(5rem + env(safe-area-inset-bottom))" }}>
             {/* header */}
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>

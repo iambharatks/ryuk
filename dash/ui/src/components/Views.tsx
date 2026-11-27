@@ -38,7 +38,7 @@ export function ChronicleView({ data }: { data: Data }) {
       <div className="mt-8 space-y-10">
         {[...groups].map(([day, evs]) => (
           <section key={day}>
-            <div className="sticky top-[118px] z-10 -mx-2 flex items-baseline justify-between bg-canvas/90 px-2 py-2 backdrop-blur md:top-[72px]">
+            <div className="sticky-day sticky z-10 -mx-2 flex items-baseline justify-between bg-canvas/90 px-2 py-2 backdrop-blur">
               <h3 className="font-serif text-[26px] text-ink">{prettyDay(day)}</h3>
               <span className="font-mono text-[11px] text-slate">{evs.length} entries</span>
             </div>
@@ -63,7 +63,6 @@ const TABS: { table: keyof Data; label: string; cols: string[]; editable?: strin
   { table: "water", label: "Water", cols: ["logged_at", "ml"] },
   { table: "checkins", label: "Check-ins", cols: ["logged_at", "metric", "score"] },
   { table: "notes", label: "Notes", cols: ["logged_at", "note_kind", "text"] },
-  { table: "finance_log", label: "Money", cols: ["date", "time", "type", "amount", "merchant", "channel", "account_last4", "balance", "date_in_sms"], editable: ["merchant", "type", "channel"] },
   { table: "pins", label: "Pins", cols: ["created_at", "kind", "title", "note", "image_url"] },
   { table: "messages", label: "Messages", cols: ["received_at", "text", "status", "model"], editable: ["status"] },
 ];

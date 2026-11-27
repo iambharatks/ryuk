@@ -96,6 +96,29 @@ eq("finance: empty text -> 400", (await post("/ingest/finance", "ik", { text: " 
 const xr = await bot.fetch(new Request("https://x/ingest/sms", { method: "POST", headers: { "X-Ryuk-Key": "ik", "content-type": "text/plain" }, body: "Rs.60 paid from a/c XX2222 to chai@ybl" }), env);
 eq("finance: old /ingest/sms + X-Ryuk-Key still work", (await xr.json()).status, "recorded");
 
+// finance: filed on arrival (built-in lists, then your rules), all in plain code
+eq("finance: SWIGGY filed as food automatically", q("SELECT category, invest_class, category_src FROM finance_log WHERE merchant = 'SWIGGY'")[0], { category: "food", invest_class: null, category_src: "auto" });
+r = await post("/ingest/finance", "ik", { text: "Rs.5000.00 debited from a/c **1234 on 05-DEC at NIPPON INDIA MF SIP." });
+eq("finance: MF SIP filed as investment", [r.body.category, q("SELECT invest_class FROM finance_log WHERE merchant LIKE 'NIPPON%'")[0]?.invest_class], ["investment", "mutual_fund"]);
+sq.exec(`INSERT INTO finance_rules (pattern, category, invest_class) VALUES ('RAHULRENT', 'rent', NULL)`);
+r = await post("/ingest/finance", "ik", { text: "Rs.22000 paid from a/c XX2222 to rahulrent@ybl" });
+eq("finance: your rule wins", [r.body.status, r.body.category, q("SELECT category_src FROM finance_log WHERE merchant LIKE 'rahulrent%'")[0]?.category_src], ["recorded", "rent", "rule"]);
+eq("finance: Gemini never called for SMS", gemini, 0);
+{
+  // a database that has not had migrations/003_money.sql yet still records (without a category)
+  const old = new DatabaseSync(":memory:");
+  old.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8")
+    .replace(/\n  category      TEXT,[^\n]*\n  invest_class  TEXT,[^\n]*\n  category_src  TEXT,[^\n]*\n  note          TEXT,/, "")
+    .replace(/CREATE INDEX IF NOT EXISTS idx_finance_category[^\n]*\n/, "")
+    .replace(/CREATE TABLE IF NOT EXISTS finance_rules \([\s\S]*?\);/, ""));
+  const ost = (sql, args = []) => ({ bind: (...x) => ost(sql, x), _run() { const p = old.prepare(sql); return /^\s*(SELECT|WITH)|RETURNING/i.test(sql) ? { results: p.all(...args), success: true } : (p.run(...args), { results: [], success: true }); },
+    async run() { return this._run(); }, async all() { return this._run(); }, async first() { return this._run().results[0] ?? null; } });
+  const oenv = { ...env, DB: { prepare: (x) => ost(x), batch: async (arr) => arr.map((x) => x._run()) } };
+  ok("finance: test db really is pre-migration", !old.prepare("PRAGMA table_info(finance_log)").all().some((c) => c.name === "category"));
+  const res = await bot.fetch(new Request("https://x/ingest/finance", { method: "POST", headers: { authorization: "Bearer ik", "content-type": "application/json" }, body: JSON.stringify({ text: SMS }) }), oenv);
+  eq("finance: pre-migration db still records", [res.status, (await res.json()).status, old.prepare("SELECT COUNT(*) n FROM finance_log").get().n], [200, "recorded", 1]);
+}
+
 // health
 const before = telegram.length;
 r = await post("/ingest/health", "hk", { date: "2026-11-20", steps: "8420", excerciseMinutes: "55", runningSpeed: "5.2", walkRunDistance: "3.5" });

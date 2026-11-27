@@ -31,7 +31,7 @@ export function NotebookDeck({ pages, apples, lines, opening, onOpen }: {
       <button ref={anchor} onClick={onOpen} disabled={opening} aria-label="Open the notebook and write"
         className={`notebook-deck group relative mx-auto block w-full max-w-[180px] ${opening ? "invisible" : ""}`} style={{ aspectRatio: COVER_RATIO }}>
         <ClosedNotebook pages={pages} apples={apples} />
-        <span className="pointer-events-none absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap font-mono text-[9.5px] uppercase tracking-[0.2em] text-slate opacity-60 transition-opacity group-hover:opacity-100">
+        <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap font-mono text-[8.5px] uppercase tracking-[0.18em] text-slate opacity-60 transition-opacity group-hover:opacity-100 sm:-bottom-7 sm:text-[9.5px] sm:tracking-[0.2em]">
           tap to open
         </span>
       </button>
@@ -48,7 +48,7 @@ function CoverFace({ pages, apples }: { pages: number; apples: number }) {
       <img src={cover} alt="" draggable={false} className="absolute inset-0 h-full w-full select-none object-cover object-[50%_18%]" />
       {/* spine: a thin dark line with a faint highlight beside it */}
       <div className="absolute inset-y-0 left-[8px] w-[2px] bg-[#050505] shadow-[1px_0_0_rgba(255,255,255,.07)]" />
-      <div className="absolute inset-x-0 bottom-3 flex justify-center gap-4 pl-[10px] font-mono text-[9.5px] text-slate">
+      <div className="absolute inset-x-0 bottom-2 flex justify-center gap-2 whitespace-nowrap pl-[10px] font-mono text-[8px] text-slate sm:bottom-3 sm:gap-4 sm:text-[9.5px]">
         <span>{pages.toLocaleString()} entries</span>
         <span className="flex items-center gap-1" title="One apple for each day this month with 8 or more entries"><MiniApple />{apples}</span>
       </div>
@@ -63,7 +63,7 @@ function ClosedNotebook({ pages, apples }: { pages: number; apples: number }) {
       <div className="absolute inset-y-[6px] -right-[6px] left-[4px] rounded-r-[6px] rounded-l-[2px] bg-[linear-gradient(90deg,#d8d2c1_0%,#b8b2a1_60%,#a09a89_100%)] shadow-[0_18px_40px_-16px_rgba(0,0,0,.9)]" />
       <div className="absolute inset-y-[9px] -right-[2px] left-[5px] rounded-r-[5px] rounded-l-[2px] bg-[repeating-linear-gradient(180deg,#d8d2c1_0_1px,#b4ae9d_1px_2px)]" />
       <div className="notebook-deck-cover absolute inset-0"><CoverFace pages={pages} apples={apples} /></div>
-      <div className="ribbon absolute -bottom-[30px] right-[20px] h-[30px] w-[9px] origin-top bg-apple [clip-path:polygon(0_0,100%_0,100%_100%,50%_82%,0_100%)]" />
+      <div className="ribbon absolute -bottom-[16px] right-[12px] h-[16px] w-[7px] sm:-bottom-[30px] sm:right-[20px] sm:h-[30px] sm:w-[9px] origin-top bg-apple [clip-path:polygon(0_0,100%_0,100%_100%,50%_82%,0_100%)]" />
     </div>
   );
 }

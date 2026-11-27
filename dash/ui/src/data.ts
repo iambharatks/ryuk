@@ -21,7 +21,7 @@ export type NewPin = { title: string; quote?: string; image_url?: string; link?:
 
 // finance_log: parsed bank SMS (the SMS text itself is never stored)
 export type FinanceRow = { id: number; date: string; time: S; type: "debit" | "credit" | "refund"; amount: number; account_last4: string;
-  merchant: S; balance: N; channel: S; raw_direction: S; date_in_sms: S; source: S; created_at: string };
+  merchant: S; balance: N; channel: S; raw_direction: S; date_in_sms: S; source: S; category?: S; invest_class?: S; note?: S; created_at: string };
 // health_log: one row per IST day from the Health Watcher Shortcut
 export type HealthRow = { id: number; date: string; steps: N; exercise_minutes: N; running_speed: N; walk_run_distance: N; heart_rate_avg: N;
   sleep_minutes: N; weight_kg: N; active_cal: N; stand_minutes: N; running_power: N; running_stride_length: N; created_at: string };
@@ -301,7 +301,7 @@ export function dayCounter(d: Data): DayCounter {
   const yesterday = prev7[0];
   // finance_log dates are already IST days
   const spendBy = new Map<string, number>();
-  for (const t of d.finance_log ?? []) if (t.type === "debit") spendBy.set(t.date, (spendBy.get(t.date) || 0) + (t.amount || 0));
+  for (const t of d.finance_log ?? []) if (t.type === "debit" && !["investment", "transfer"].includes(t.category ?? "")) spendBy.set(t.date, (spendBy.get(t.date) || 0) + (t.amount || 0));
   const spend = spendBy.get(today) ?? 0;
   const spendAvg = avg(spendBy);
 

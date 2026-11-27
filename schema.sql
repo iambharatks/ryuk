@@ -206,10 +206,30 @@ CREATE TABLE IF NOT EXISTS finance_log (
   raw_direction TEXT,                        -- the verb in the SMS: debited, paid, reversed...
   date_in_sms   TEXT,                        -- the date as the SMS wrote it
   source        TEXT DEFAULT 'sms',
-  sms_hash      TEXT UNIQUE,
+  sms_hash      TEXT UNIQUE,                 -- NULL for entries added by hand
+  category      TEXT,                        -- src/classify.ts CATEGORIES key; NULL = uncategorised
+  invest_class  TEXT,                        -- INVEST_CLASSES key when category = 'investment'
+  category_src  TEXT,                        -- auto | rule | manual (manual is never overwritten)
+  note          TEXT,
   created_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_finance_date ON finance_log(date);
+CREATE INDEX IF NOT EXISTS idx_finance_category ON finance_log(category);
+
+-- "Always file merchant X as Y": substring of the merchant, case-insensitive. Applied at ingest and on re-classify.
+CREATE TABLE IF NOT EXISTS finance_rules (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  pattern       TEXT NOT NULL UNIQUE,        -- stored upper-case
+  category      TEXT NOT NULL,
+  invest_class  TEXT,
+  created_at    TEXT DEFAULT (datetime('now'))
+);
+
+-- Monthly spending limit per category.
+CREATE TABLE IF NOT EXISTS finance_budgets (
+  category      TEXT PRIMARY KEY,
+  monthly_limit REAL NOT NULL
+);
 
 -- ================= Apple Health ("Health Watcher" iPhone Shortcut) =================
 -- One row per IST day, upserted. A later sync fills in values but never blanks one. Never sent to Gemini or Telegram.

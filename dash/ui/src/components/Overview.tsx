@@ -27,12 +27,8 @@ export function Overview({ data, store, onAddPin, onDeletePin, opening, onOpenNo
   }, [data]);
   return (
     <>
-      <div className="mb-10 grid grid-cols-1 items-stretch gap-8 lg:grid-cols-[minmax(0,1fr)_200px] lg:gap-12">
-        <DayCounterStrip data={data} />
-        <div className="hidden pb-7 lg:block">
-          <NotebookDeck pages={notebookStats.pages} apples={notebookStats.apples} lines={todayLines} opening={opening} onOpen={onOpenNotebook} />
-        </div>
-      </div>
+      <DayCounterStrip data={data}
+        deck={<NotebookDeck pages={notebookStats.pages} apples={notebookStats.apples} lines={todayLines} opening={opening} onOpen={onOpenNotebook} />} />
       <VitalsStrip data={data} />
       <GoalsBoard store={store} />
       <PinWall pins={data.pins} onAdd={onAddPin} onDelete={onDeletePin} demo={demo}

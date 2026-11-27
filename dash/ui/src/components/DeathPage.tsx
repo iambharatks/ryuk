@@ -252,7 +252,7 @@ export function DeathPage({ store, onChanged, onApple, write = 0 }: { store: Sto
       <input aria-label="Time (HH:MM)" value={editing.time} inputMode="numeric" maxLength={5} placeholder="--:--"
         onChange={(e) => setEditing({ ...editing, time: e.target.value.replace(/[^\d:]/g, "") })}
         onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(null); }}
-        className="dn-input ml-auto mr-2 w-[52px] rounded border border-[rgba(120,30,22,.35)] px-1 text-center font-mono text-[12px] text-[#7a1d14]" />
+        className="dn-input ml-auto mr-2 w-[60px] rounded border border-[rgba(120,30,22,.35)] px-1 text-center font-mono text-[12px] text-[#7a1d14]" />
       <div className="flex flex-wrap items-center gap-2 pl-3">
         <input autoFocus aria-label="Edit line" value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })}
           onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(null); }}

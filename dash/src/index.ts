@@ -6,6 +6,7 @@
 import PAGE from "./page.html";
 import { addGoal, addPin, deleteGoal, deletePin, editGoal, editPin, listGoals, listPins } from "./workspace";
 import { type BotRPC, addLibrary, addTask, deleteLibrary, deleteTask, editEntry, editLibrary, editTask, getPage, libraryProgress, serveFile, upload } from "./extra";
+import { addRule, addTxn, coinData, deleteRule, deleteTxn, editTxn, exportTxns, reclassify, setBudget } from "./coin";
 
 export interface Env {
   DB: D1Database;
@@ -91,7 +92,7 @@ const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
 // explicit columns: the SMS hash and the raw health payload never leave the database
-const FINANCE_COLS = "id, date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, created_at";
+const FINANCE_COLS = "id, date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, category, invest_class, note, created_at";
 const HEALTH_COLS = "id, date, steps, exercise_minutes, running_speed, walk_run_distance, heart_rate_avg, sleep_minutes, weight_kg, active_cal, stand_minutes, running_power, running_stride_length, created_at";
 const istDate = (iso: string) => new Date(Date.parse(iso) + 19800e3).toISOString().slice(0, 10);
 
@@ -220,6 +221,16 @@ export default {
     }
     if (url.pathname === "/api/health" && req.method === "GET") return json(await rangeRows(env, "health_log", rangeDays(url.searchParams.get("range"), 7)));
     if (url.pathname === "/api/finance" && req.method === "GET") return json(await rangeRows(env, "finance_log", rangeDays(url.searchParams.get("range"), 30)));
+    // Money (finance), apart from the daily logs
+    if (url.pathname === "/api/coin" && req.method === "GET") return coinData(env, url);
+    if (url.pathname === "/api/coin/export" && req.method === "GET") return exportTxns(env, url);
+    if (url.pathname === "/api/coin/txn" && req.method === "POST") return addTxn(env, await req.json());
+    if (url.pathname === "/api/coin/txn" && req.method === "PATCH") return editTxn(env, await req.json());
+    if (url.pathname === "/api/coin/txn" && req.method === "DELETE") return deleteTxn(env, await req.json());
+    if (url.pathname === "/api/coin/rules" && req.method === "POST") return addRule(env, await req.json());
+    if (url.pathname === "/api/coin/rules" && req.method === "DELETE") return deleteRule(env, await req.json());
+    if (url.pathname === "/api/coin/budgets" && req.method === "PUT") return setBudget(env, await req.json());
+    if (url.pathname === "/api/coin/reclassify" && req.method === "POST") return reclassify(env);
     if (url.pathname === "/api/row" && req.method === "PATCH") return editRow(env, await req.json());
     if (url.pathname === "/api/row" && req.method === "DELETE") return deleteRow(env, await req.json());
     if (url.pathname === "/api/pins" && req.method === "GET") return listPins(env);

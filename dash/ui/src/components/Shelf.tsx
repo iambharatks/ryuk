@@ -85,8 +85,8 @@ function Viewer({ item, src, store, onClose, onSaved }: { item: LibItem; src: st
   }, []);
   useEffect(() => { const k = (e: KeyboardEvent) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-[18px] border border-hairline bg-surface" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={item.title}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm safe-pad" onMouseDown={onClose}>
+      <div className="flex max-h-full w-full max-w-5xl flex-col overflow-hidden rounded-[18px] border border-hairline bg-surface" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label={item.title}>
         <div className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-2.5">
           <div className="min-w-0"><div className="eyebrow">{item.kind}</div><div className="truncate text-[14px] text-ink">{item.title}</div></div>
           <div className="flex items-center gap-2">
@@ -98,14 +98,16 @@ function Viewer({ item, src, store, onClose, onSaved }: { item: LibItem; src: st
                 <button className="btn !py-1"><Bookmark size={12} />Mark</button>
               </form>
             )}
+            {/* iPhone shows only the first page of a PDF inside a frame: open it whole */}
+            {item.kind === "pdf" && <a href={src} target="_blank" rel="noopener" className="btn !py-1"><ExternalLink size={12} />Open</a>}
             <button className="btn !px-2" onClick={onClose} aria-label="Close"><X size={15} /></button>
           </div>
         </div>
         <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-          {item.kind === "video" && <video ref={ref} src={src} controls playsInline autoPlay className="max-h-[80vh] w-full" onLoadedMetadata={(e) => { const el = e.currentTarget; if (item.progress) el.currentTime = item.progress; if (!item.total && Number.isFinite(el.duration)) store.editItem(item.id, { total: Math.round(el.duration) }).then(onSaved).catch(() => {}); }} onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)} onPause={(e) => save(e.currentTarget.currentTime)} />}
+          {item.kind === "video" && <video ref={ref} src={src} controls playsInline autoPlay className="max-h-[80dvh] w-full" onLoadedMetadata={(e) => { const el = e.currentTarget; if (item.progress) el.currentTime = item.progress; if (!item.total && Number.isFinite(el.duration)) store.editItem(item.id, { total: Math.round(el.duration) }).then(onSaved).catch(() => {}); }} onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)} onPause={(e) => save(e.currentTarget.currentTime)} />}
           {item.kind === "audio" && <div className="w-full p-8"><audio ref={ref} src={src} controls autoPlay className="w-full" onLoadedMetadata={(e) => { if (item.progress) e.currentTarget.currentTime = item.progress; }} onTimeUpdate={(e) => setPos(e.currentTarget.currentTime)} onPause={(e) => save(e.currentTarget.currentTime)} /></div>}
-          {item.kind === "pdf" && <iframe title={item.title} src={`${src}#page=${item.progress || 1}`} className="h-[80vh] w-full bg-white" />}
-          {item.kind === "image" && <img src={src} alt={item.title} className="max-h-[82vh] w-auto object-contain" />}
+          {item.kind === "pdf" && <iframe title={item.title} src={`${src}#page=${item.progress || 1}`} className="h-[80dvh] w-full bg-white" />}
+          {item.kind === "image" && <img src={src} alt={item.title} className="max-h-[82dvh] w-auto object-contain" />}
         </div>
       </div>
     </div>
@@ -210,7 +212,7 @@ function ProgressControl({ item, store, onSaved }: { item: LibItem; store: Store
   );
   if (timed(item.kind)) return (
     <form className="flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); set(parseClock(v)); }}>
-      <input value={v} onChange={(e) => setV(e.target.value)} placeholder="at 25:30" className="field !w-[88px] !py-1 text-center font-mono text-[12px]" />
+      <input value={v} onChange={(e) => setV(e.target.value)} placeholder="at 25:30" className="field !w-[96px] !py-1 text-center font-mono text-[12px]" />
       <button className="btn !py-1 !px-2" disabled={busy || !v} aria-label="Save timestamp"><Bookmark size={12} /></button>
     </form>
   );

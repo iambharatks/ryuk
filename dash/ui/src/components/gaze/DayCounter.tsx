@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Data, allEvents, dayCounter, dayKey, hhmm, todayKey } from "../../data";
 import { TAG_ICON } from "./ChronicleCard";
 
@@ -6,9 +6,11 @@ const SHOWN = 5;
 
 /**
  * Days written, big, with the day of the notebook, the streak and today's entry count beside it,
- * then the latest lines written today so the space beside the notebook says something.
+ * the notebook (`deck`) on the right, then the latest lines written today.
+ * Phones: the notebook sits small beside the count and the list runs full width under both.
+ * Desktop: the notebook stands tall beside count and list.
  */
-export function DayCounterStrip({ data }: { data: Data }) {
+export function DayCounterStrip({ data, deck }: { data: Data; deck?: ReactNode }) {
   const dc = useMemo(() => dayCounter(data), [data]);
   const entries = dc.tallies.find((t) => t.key === "entries")?.now ?? 0;
   const today = useMemo(() => {
@@ -16,20 +18,22 @@ export function DayCounterStrip({ data }: { data: Data }) {
     return allEvents(data).filter((e) => dayKey(e.at) === t).sort((a, b) => b.at.localeCompare(a.at));
   }, [data]);
   return (
-    <section aria-label="Day counter" className="flex h-full flex-col justify-between gap-6">
-      <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+    <section aria-label="Day counter" className="mb-12 grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-8 lg:grid-cols-[minmax(0,1fr)_200px] lg:gap-x-14">
+      <div className="flex min-w-0 flex-wrap items-end gap-x-8 gap-y-4 self-center lg:self-start">
         <div>
           <div className="font-frak text-[76px] leading-[0.8] text-ink md:text-[96px]"><CountUp value={dc.daysWritten} /></div>
           <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-slate">Days written</div>
         </div>
-        <div className="flex gap-6 pb-1">
+        <div className="flex flex-wrap gap-x-6 gap-y-3 pb-1 sm:gap-x-8">
           <Stat n={dc.dayN} label="day of the notebook" />
           <Stat n={dc.streak} label="day streak" red />
           <Stat n={entries} label={entries === 1 ? "entry today" : "entries today"} />
         </div>
       </div>
 
-      <div className="min-w-0">
+      {deck && <div className="w-[104px] pb-8 sm:w-[128px] lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:w-full lg:self-center lg:pb-7">{deck}</div>}
+
+      <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-1 lg:row-start-2 lg:self-end">
         <div className="mb-1.5 flex items-baseline justify-between border-b border-hairline pb-1.5">
           <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-slate">Written today</span>
           {today.length > SHOWN && <span className="font-mono text-[10px] text-slate-dim">+{today.length - SHOWN} more</span>}

@@ -11,6 +11,7 @@
  * Authenticated, valid requests always get 200 {ok, status} so the Shortcut never shows an error.
  */
 import { parseBankSMS } from "./finance";
+import { classify, type Rule } from "./classify";
 
 export interface IngestEnv {
   DB: D1Database;
@@ -71,11 +72,27 @@ export async function handleFinance(req: Request, env: IngestEnv): Promise<Respo
 
   const atMs = at && !Number.isNaN(Date.parse(at)) ? Date.parse(at) : Date.now();
   const { date, time } = istDateTime(atMs);
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO finance_log (date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, sms_hash)
-     VALUES (?,?,?,?,?,?,?,?,?,?, 'sms', ?)`,
-  ).bind(date, time, parsed.type, parsed.amount, parsed.account_last4, parsed.merchant || null, parsed.balance,
-    parsed.channel, parsed.raw_direction, parsed.date_in_sms, hash).run();
+  // file it (your rules first, then the built-in keyword lists) — plain code, nothing leaves the Worker
+  let filed = null as ReturnType<typeof classify>;
+  try {
+    const { results } = await env.DB.prepare(`SELECT pattern, category, invest_class FROM finance_rules`).all<Rule>();
+    filed = classify({ merchant: parsed.merchant, type: parsed.type, channel: parsed.channel }, results ?? []);
+  } catch { filed = classify({ merchant: parsed.merchant, type: parsed.type, channel: parsed.channel }); }   // rules table not migrated yet
+  try {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO finance_log (date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, sms_hash, category, invest_class, category_src)
+       VALUES (?,?,?,?,?,?,?,?,?,?, 'sms', ?,?,?,?)`,
+    ).bind(date, time, parsed.type, parsed.amount, parsed.account_last4, parsed.merchant || null, parsed.balance,
+      parsed.channel, parsed.raw_direction, parsed.date_in_sms, hash, filed?.category ?? null, filed?.invest_class ?? null, filed?.src ?? null).run();
+  } catch (e) {
+    // migrations/003_money.sql not run yet: record without the category so the Shortcut never fails
+    if (!/no (such )?column|has no column/i.test(String((e as Error)?.message ?? e))) throw e;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO finance_log (date, time, type, amount, account_last4, merchant, balance, channel, raw_direction, date_in_sms, source, sms_hash)
+       VALUES (?,?,?,?,?,?,?,?,?,?, 'sms', ?)`,
+    ).bind(date, time, parsed.type, parsed.amount, parsed.account_last4, parsed.merchant || null, parsed.balance,
+      parsed.channel, parsed.raw_direction, parsed.date_in_sms, hash).run();
+  }
 
   // no amount, merchant or account in the ping
   if (env.FINANCE_ALERTS !== "0" && env.TELEGRAM_TOKEN && env.OWNER_CHAT_ID) {
@@ -84,5 +101,5 @@ export async function handleFinance(req: Request, env: IngestEnv): Promise<Respo
       body: JSON.stringify({ chat_id: env.OWNER_CHAT_ID, text: "💰 Finance entry logged" }),
     }).catch(() => {});
   }
-  return json({ ok: true, status: "recorded", type: parsed.type, amount: parsed.amount, merchant: parsed.merchant });
+  return json({ ok: true, status: "recorded", type: parsed.type, amount: parsed.amount, merchant: parsed.merchant, category: filed?.category ?? null });
 }

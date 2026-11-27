@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Command, PenLine, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
 import { Data, NewPin, Pin, apiAddPin, apiDeletePin, apiRow, demoData, fetchData } from "./data";
 import { DeathPage } from "./components/DeathPage";
@@ -11,9 +11,11 @@ import { ChronicleView, TelemetryView, VaultView } from "./components/Views";
 import { OWNER } from "./config";
 import { AppleDrop, Ash, NotebookIntro, RuleOfTheNote, ShinigamiEye, Watcher } from "./components/Lore";
 import { lastDays } from "./data";
+import { Coin } from "./components/Coin";
+import { apiCoin, demoCoin } from "./coin";
 
-const VIEWS = ["Gaze", "Page", "Shelf", "Notebook", "Ledger", "Eyes"] as const;
-const VIEW_LABEL: Record<string, string> = { Gaze: "Gaze", Page: "Page", Shelf: "Shelf", Notebook: "Notebook", Ledger: "Ledger", Eyes: "Eyes" };
+const VIEWS = ["Gaze", "Page", "Shelf", "Notebook", "Money", "Ledger", "Eyes"] as const;
+const VIEW_LABEL: Record<string, string> = { Gaze: "Gaze", Page: "Page", Shelf: "Shelf", Notebook: "Notebook", Money: "Money", Ledger: "Ledger", Eyes: "Eyes" };
 type View = (typeof VIEWS)[number];
 
 // Demo data only on ?demo or when opened from a local file / localhost (never silently in production).
@@ -33,12 +35,13 @@ export default function App() {
   const [opening, setOpening] = useState(false);
   const openNotebook = () => {
     setOpening(true);
-    setTimeout(() => { setView("Page"); setOpening(false); }, 1100);
+    setTimeout(() => { startWriting(); setOpening(false); }, 1100);    // lands on today's page, pen on the next line
   };
 
   const [demoS] = useState<Store | null>(() => (DEMO ? demoStore() : null));
   const uploads = !!(data as any)?.uploads;
   const store = useMemo(() => demoS ?? apiStore(uploads), [demoS, uploads]);
+  const coin = useMemo(() => (DEMO ? demoCoin() : apiCoin()), []);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2200); };
 
   const load = useCallback(async () => {
@@ -95,27 +98,27 @@ export default function App() {
   const status = useMemo(() => (DEMO ? "DEMO DATA" : state === "synced" ? "EYES OPEN" : state === "loading" ? "TURNING PAGES" : "NOTEBOOK UNREACHABLE"), [state]);
 
   return (
-    <div className="relative min-h-screen pb-32">
+    <div className="relative min-h-screen min-h-dvh" style={{ paddingBottom: "calc(4rem + env(safe-area-inset-bottom))" }}>
       <NotebookIntro />
       <Ash />
       <AppleDrop run={apple} />
       {/* ---------- top bar ---------- */}
-      <header className="sticky top-0 z-40 border-b border-hairline bg-surface/80 backdrop-blur-md">
-        <div className="mx-auto grid max-w-[1400px] grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 md:px-8">
+      <header className="sticky top-0 z-40 border-b border-hairline bg-surface/80 backdrop-blur-md" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+        <div className="mx-auto grid max-w-[1400px] grid-cols-[auto_1fr_auto] items-center gap-4 py-3 page-x">
           <a href="#gaze" onClick={() => setView("Gaze")} className="flex min-h-[44px] items-center gap-2.5">
             <span className="emblem-pulse"><Emblem /></span>
             <span className="font-frak text-[30px] leading-none tracking-[0.06em] text-ink">RYUK</span>
           </a>
-          <nav className="hidden justify-center md:flex" aria-label="Views">
+          <nav className="hidden justify-center lg:flex" aria-label="Views">
             <div className="flex gap-1 rounded-full border border-hairline bg-canvas/60 p-1">
               {VIEWS.map((v) => (
                 <button key={v} onClick={() => setView(v)} aria-current={view === v ? "page" : undefined}
-                  className={`rounded-full px-4 py-1.5 text-[13px] transition-colors ${view === v ? "bg-raised text-ink shadow-[inset_0_0_0_1px_#24242C]" : "text-slate hover:text-ink"}`}>{VIEW_LABEL[v]}</button>
+                  className={`rounded-full px-3 py-1.5 text-[13px] transition-colors lg:px-4 ${view === v ? "bg-raised text-ink shadow-[inset_0_0_0_1px_#24242C]" : "text-slate hover:text-ink"}`}>{VIEW_LABEL[v]}</button>
               ))}
             </div>
           </nav>
           <div className="flex items-center justify-end gap-2">
-            <span className="hidden items-center gap-2.5 lg:flex" title={OWNER.title}>
+            <span className="hidden items-center gap-2.5 2xl:flex" title={OWNER.title}>
               <span className="flex h-8 w-8 items-center justify-center rounded-full border border-apple/50 bg-apple/[0.08] font-serif text-[16px] text-ink">{OWNER.name[0]}</span>
               <span className="leading-tight">
                 <span className="block text-[12.5px] text-ink">{OWNER.name}</span>
@@ -129,13 +132,13 @@ export default function App() {
             <button onClick={load} aria-label="Refresh" className="hidden rounded-full p-2 text-slate transition hover:text-ink sm:block">
               <RefreshCw size={14} className={state === "loading" ? "animate-spin" : ""} />
             </button>
-            <span className="flex items-center gap-2 rounded-full border border-hairline bg-canvas/60 px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-[0.2em] text-slate">
+            <span className="flex items-center gap-2 whitespace-nowrap rounded-full border border-hairline bg-canvas/60 px-3 py-1.5 font-mono text-[9.5px] uppercase tracking-[0.2em] text-slate">
               {state === "error" ? <span className="h-2 w-2 rounded-full bg-slate-dim" /> : <LiveDot />}
-              <span className="hidden sm:inline">RYUK // OBSERVING •</span> {status}
+              <span className="hidden lg:inline">RYUK // OBSERVING •</span> {status}
             </span>
           </div>
         </div>
-        <nav className="no-scrollbar flex gap-1 overflow-x-auto px-4 pb-2.5 md:hidden" aria-label="Views">
+        <nav className="no-scrollbar page-x flex gap-1 overflow-x-auto pb-2.5 lg:hidden" aria-label="Views">
           {VIEWS.map((v) => (
             <button key={v} onClick={() => setView(v)} className={`min-h-[44px] shrink-0 rounded-full px-4 text-[13px] ${view === v ? "bg-raised text-ink shadow-[inset_0_0_0_1px_#24242C]" : "text-slate"}`}>{VIEW_LABEL[v]}</button>
           ))}
@@ -143,47 +146,39 @@ export default function App() {
       </header>
 
       {/* ---------- page ---------- */}
-      <main className="relative z-10 mx-auto max-w-[1400px] px-4 pt-6 md:px-8">
+      <main className="page-x relative z-10 mx-auto max-w-[1400px] pt-6 md:pt-8">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="eyebrow">{greet}, {OWNER.name} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" })}</p>
             <h1 key={view} className="ink-write mt-1.5 font-serif text-[32px] leading-[1.02] text-ink md:text-[48px]">
-              {view === "Gaze" ? <>Everything is <em className="written-glow text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : view === "Page" ? <>Write it <em className="text-slate">as it happens</em></> : view === "Shelf" ? <>The <em className="text-slate">shelf</em></> : <>Shinigami <em className="text-slate">eyes</em></>}
+              {view === "Gaze" ? <>Everything is <em className="written-glow text-apple/90">written.</em></> : view === "Notebook" ? <>The notebook, <em className="text-slate">page by page</em></> : view === "Ledger" ? <>The ledger</> : view === "Money" ? <>The ledger <em className="text-slate">of coin</em></> : view === "Page" ? <>Write it <em className="text-slate">as it happens</em></> : view === "Shelf" ? <>The <em className="text-slate">shelf</em></> : <>Shinigami <em className="text-slate">eyes</em></>}
             </h1>
           </div>
           {view === "Gaze" && <div className="hidden xl:block"><RuleOfTheNote /></div>}
         </div>
         <div className="ink-stroke" aria-hidden="true" />
-        {state === "error" && !data && view !== "Page" && view !== "Shelf" && (
+        {state === "error" && !data && view !== "Page" && view !== "Shelf" && view !== "Money" && (
           <div className="card p-10 text-center">
             <Watcher size={80} className="mx-auto mb-4" /><p className="font-serif text-2xl text-ink">The notebook could not be reached.</p>
             <p className="mt-2 font-mono text-xs text-slate">{err}</p>
             <button className="btn mt-6" onClick={load}><RefreshCw size={14} />Try again</button>
           </div>
         )}
-        {!data && state === "loading" && view !== "Page" && view !== "Shelf" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
+        {!data && state === "loading" && view !== "Page" && view !== "Shelf" && view !== "Money" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
         <div key={view} className="view-fade">
         {data && view === "Gaze" && <Overview data={data} store={store} onAddPin={onAddPin} onDeletePin={onDeletePin} opening={opening} onOpenNotebook={openNotebook} notebookStats={notebookStats} demo={DEMO} />}
         {view === "Page" && <DeathPage store={store} write={write} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
         {view === "Shelf" && <Shelf store={store} onChanged={() => { if (!DEMO) load(); }} />}
+        {view === "Money" && <Coin store={coin} />}
         {data && view === "Notebook" && <ChronicleView data={data} />}
         {data && view === "Ledger" && <VaultView data={data} onEdit={onEdit} onDelete={onDelete} />}
         {data && view === "Eyes" && <TelemetryView data={data} days={days} setDays={setDays} onOpenEyes={() => setEyesOpen(true)} />}
         </div>
       </main>
 
-      {/* ---------- quick capture ---------- */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center px-4" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <button onClick={startWriting}
-          className="pointer-events-auto group flex items-center gap-3 rounded-full border border-hairline bg-surface/85 py-2.5 pl-4 pr-2.5 shadow-[0_12px_40px_-12px_rgba(0,0,0,.8)] backdrop-blur-md transition-colors hover:border-hover">
-          <PenLine size={15} className="text-apple" />
-          <span className="text-[13.5px] text-ink">Write in the notebook</span>
-          <kbd className="hidden items-center gap-0.5 rounded-lg border border-hairline bg-canvas px-2 py-1 font-mono text-[10.5px] text-slate sm:flex"><Command size={10} />K</kbd>
-        </button>
-      </div>
       {data && <ShinigamiEyes open={eyesOpen} onClose={() => setEyesOpen(false)} data={data} />}
 
-      <div role="status" className={`fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-full border border-hairline bg-raised px-4 py-2 font-mono text-[11px] text-ink transition-opacity ${toast ? "opacity-100" : "pointer-events-none opacity-0"}`}>{toast}</div>
+      <div role="status" style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))" }} className={`fixed left-1/2 z-50 -translate-x-1/2 rounded-full border border-hairline bg-raised px-4 py-2 font-mono text-[11px] text-ink transition-opacity ${toast ? "opacity-100" : "pointer-events-none opacity-0"}`}>{toast}</div>
     </div>
   );
 }

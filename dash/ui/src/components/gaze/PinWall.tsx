@@ -155,7 +155,7 @@ function PinForm({ onSave, onClose, demo, prefill, upload }: {
     catch (x) { setErr((x as Error).message); setBusy(false); }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm safe-pad" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form onSubmit={submit} className="w-full max-w-sm space-y-3 rounded-2xl border border-hairline bg-surface p-5" role="dialog" aria-label="Pin to the wall">
         <div className="flex items-center justify-between">
           <h3 className="font-serif text-[22px] text-ink">Pin to the wall</h3>

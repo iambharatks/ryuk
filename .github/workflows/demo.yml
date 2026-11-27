@@ -1,0 +1,43 @@
+# Publishes the dashboard's demo build (sample data, no backend, no login) to GitHub Pages.
+# One-time: repo Settings → Pages → Source: "GitHub Actions".
+name: Demo
+on:
+  push:
+    branches: [main, v4]
+    paths: ["dash/ui/**", "src/classify.ts", ".github/workflows/demo.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dash/ui/package-lock.json
+      - run: npm ci
+        working-directory: dash/ui
+      - run: npx vite build --outDir dist-demo
+        working-directory: dash/ui
+        env:
+          VITE_DEMO: "1"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dash/ui/dist-demo
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

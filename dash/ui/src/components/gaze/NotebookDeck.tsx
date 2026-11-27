@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MiniApple } from "../Lore";
-import cover from "../../assets/notebook-cover.jpg";
+import cover from "@cover";
 
 type Line = { at: string; text: string };
 type Rect = { top: number; left: number; width: number; height: number };
@@ -45,7 +45,9 @@ const COVER_RATIO = 3 / 4;     // the portrait cover, cropped shorter around its
 function CoverFace({ pages, apples }: { pages: number; apples: number }) {
   return (
     <div className="absolute inset-0 overflow-hidden rounded-[4px] border border-[#1c1c20] bg-black">
-      <img src={cover} alt="" draggable={false} className="absolute inset-0 h-full w-full select-none object-cover object-[50%_18%]" />
+      {cover
+        ? <img src={cover} alt="" draggable={false} className="absolute inset-0 h-full w-full select-none object-cover object-[50%_18%]" />
+        : <OriginalCover />}
       {/* spine: a thin dark line with a faint highlight beside it */}
       <div className="absolute inset-y-0 left-[8px] w-[2px] bg-[#050505] shadow-[1px_0_0_rgba(255,255,255,.07)]" />
       <div className="absolute inset-x-0 bottom-2 flex justify-center gap-2 whitespace-nowrap pl-[10px] font-mono text-[8px] text-slate sm:bottom-3 sm:gap-4 sm:text-[9.5px]">
@@ -102,5 +104,21 @@ function OpeningOverlay({ from, pages, apples, lines }: { from: Rect; pages: num
         <div className="nb-cover"><CoverFace pages={pages} apples={apples} /></div>
       </div>
     </>
+  );
+}
+
+/** The demo build's cover: black leather, the title in the notebook lettering, an apple. Original artwork. */
+function OriginalCover() {
+  return (
+    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,#26221f_0%,#0d0c0b_70%)] [container-type:inline-size]">
+      <div className="absolute inset-0 opacity-40 [background:repeating-linear-gradient(115deg,rgba(255,255,255,.025)_0_2px,transparent_2px_6px)]" />
+      <div className="absolute inset-x-0 top-[22%] text-center font-frak text-[clamp(14px,19cqw,44px)] leading-none tracking-[0.06em] text-[#ece5d3]">RYUK</div>
+      <div className="absolute inset-x-0 top-[40%] mx-auto h-px w-1/2 bg-gradient-to-r from-transparent via-[#C84B31]/70 to-transparent" />
+      <svg viewBox="0 0 32 32" className="absolute left-1/2 top-[50%] h-[16%] w-[16%] -translate-x-1/2" fill="none" aria-hidden="true">
+        <path d="M16 6.5c-1.2-2.2-3-3.2-5-3.4" stroke="#ece5d3" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M16.6 7.2c1.6-2.6 4.4-3.3 6.4-2.6-.6 2.3-3 3.7-6.4 2.6Z" fill="#ece5d3" />
+        <path d="M24.9 12.2A10 10 0 1 0 25.4 22.6" stroke="#C84B31" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    </div>
   );
 }

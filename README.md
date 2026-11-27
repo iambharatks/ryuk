@@ -71,39 +71,30 @@ Then it gives it back: streaks, a day page you can edit, a money ledger that sep
 
 ```mermaid
 flowchart LR
-  subgraph phone["iPhone"]
-    direction TB
-    TG("Telegram<br/>sets · meals · notes")
-    SMS("Bank SMS<br/>Shortcut")
-    HK("Apple Health<br/>Shortcut")
-    QL("Quick log<br/>Shortcut")
-    APP("Ryuk app<br/>Face ID")
+  subgraph Phone["📱 iPhone"]
+    TG["Telegram"]
+    SC["Shortcuts<br/>bank SMS · Health · text"]
+    APP["Ryuk app<br/>(Capacitor, Face ID)"]
   end
-  WEB("Browser<br/>Face ID")
+  Browser["💻 Browser<br/>(passkey)"]
 
-  subgraph cf["Cloudflare · free tier"]
-    direction TB
-    BOT["<b>ryuk</b> · bot Worker<br/>webhook · ingest · parsers · cron"]
-    DASH["<b>ryuk-dash</b> · dashboard Worker<br/>sign-in · REST API · UI"]
+  subgraph CF["Cloudflare (free tier)"]
+    BOT["<b>ryuk</b> Worker<br/>webhook · ingest · cron"]
+    DASH["<b>ryuk-dash</b> Worker<br/>sign-in · API · UI"]
     D1[("D1<br/>SQLite")]
     R2[("R2<br/>files")]
   end
-  LLM{{"Gemini Flash-Lite<br/>JSON-schema output"}}
+  LLM["Gemini Flash-Lite<br/>JSON schema output"]
 
-  TG -- "webhook + secret token" --> BOT
-  SMS -- "INGEST_KEY · regex only" --> BOT
-  HK -- "HEALTH_KEY · plain code" --> BOT
-  QL -- "LOG_KEY" --> BOT
-  BOT -. "free text only" .-> LLM
+  TG -- "webhook + secret" --> BOT
+  SC -- "Bearer key per source" --> BOT
+  BOT -- "free text only" --> LLM
   BOT --> D1
-  DASH -- "Service Binding RPC" --> BOT
-  APP -- "Secure Enclave signature" --> DASH
-  WEB -- "passkey · WebAuthn" --> DASH
+  APP -- "Secure Enclave signature → session" --> DASH
+  Browser -- "WebAuthn → session" --> DASH
   DASH --> D1
   DASH --> R2
-
-  classDef ext stroke-dasharray: 4 3
-  class LLM ext
+  DASH -- "Service Binding RPC" --> BOT
 ```
 
 Two Workers share one D1 database. The bot owns ingestion (Telegram, Shortcuts, a nightly summary); the dashboard owns sign-in, the API

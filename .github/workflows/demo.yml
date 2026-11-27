@@ -3,7 +3,7 @@
 name: Demo
 on:
   push:
-    branches: [main, v4]
+    branches: [main]
     paths: ["dash/ui/**", "src/classify.ts", ".github/workflows/demo.yml"]
   workflow_dispatch:
 permissions:

@@ -2,13 +2,14 @@
  * Gaze workspace: the daily goals board (sticky notes) and the pin wall (posters).
  * Runs after the Access check in index.ts.
  *
- * Goals are per IST day and never carried over: each day starts with an empty board.
+ * Goals (sticky notes) stay on the board from the day they are written until they are kept: a kept note stays (struck)
+ * for the rest of that IST day and is gone the next. Tearing one off deletes it. x/y/z are where you dragged it.
  * Pins reuse the existing `pins` table: quote text lives in `note`; `position` and `link` were added by migration 002.
  */
 import { type ExtraEnv, json, saveFile } from "./extra";
 
 const STICKY_COLORS = ["#f5e6a3", "#f5c6c6", "#c6d8f5", "#c6f5d0"];
-const MAX_GOALS = 12;        // the board shows ~10; this stops a runaway client
+const MAX_GOALS = 24;        // notes on the board at once; this stops a runaway client
 const MAX_PINS = 24;         // the wall shows 12
 const MAX_IMAGE = 10 * 1024 * 1024;
 
@@ -21,9 +22,12 @@ const isHttps = (s: string) => /^https:\/\/[^\s"'<>]+$/i.test(s);
 const isUpload = (s: string) => /^\/api\/file\/files\/[a-f0-9-]{36}\/[\w.\-]{1,120}$/i.test(s);
 
 // ---------------- goals ----------------
+// open notes written on or before the day, plus notes kept on that day
+const ON_BOARD = `date <= ?1 AND (done = 0 OR COALESCE(date(done_at, '+330 minutes'), date) >= ?1)`;
+
 export async function listGoals(env: ExtraEnv, day: string | null) {
   const d = day && isDay(day) ? day : istDay();
-  const { results } = await env.DB.prepare(`SELECT * FROM daily_goals WHERE date = ? ORDER BY position, id`).bind(d).all();
+  const { results } = await env.DB.prepare(`SELECT * FROM daily_goals WHERE ${ON_BOARD} ORDER BY date, position, id`).bind(d).all();
   return json({ date: d, goals: results });
 }
 
@@ -32,8 +36,8 @@ export async function addGoal(env: ExtraEnv, body: any) {
   if (!text) return json({ error: "a goal needs words" }, 400);
   const date = body?.date == null ? istDay() : body.date;
   if (!isDay(date)) return json({ error: "bad date" }, 400);
-  const c = await env.DB.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(position), 0) AS p FROM daily_goals WHERE date = ?`).bind(date).first<{ n: number; p: number }>();
-  if ((c?.n ?? 0) >= MAX_GOALS) return json({ error: `the board holds ${MAX_GOALS} a day` }, 400);
+  const c = await env.DB.prepare(`SELECT COUNT(*) AS n, COALESCE(MAX(position), 0) AS p FROM daily_goals WHERE ${ON_BOARD}`).bind(date).first<{ n: number; p: number }>();
+  if ((c?.n ?? 0) >= MAX_GOALS) return json({ error: `the board holds ${MAX_GOALS} notes; tear one off first` }, 400);
   const row = await env.DB.prepare(`INSERT INTO daily_goals (date, text, done, color, rotation, position) VALUES (?,?,0,?,?,?) RETURNING *`)
     .bind(date, text, STICKY_COLORS[(c?.n ?? 0) % STICKY_COLORS.length], tilt(`${date}|${text}|${c?.n ?? 0}`, 3), (c?.p ?? 0) + 1).first();
   return json(row);
@@ -41,7 +45,15 @@ export async function addGoal(env: ExtraEnv, body: any) {
 
 export async function editGoal(env: ExtraEnv, id: number, body: any) {
   const sets: string[] = [], vals: unknown[] = [];
-  if (body?.done != null) { sets.push("done = ?"); vals.push(body.done === true || body.done === 1 || body.done === "1" ? 1 : 0); }
+  if (body?.done != null) {
+    const done = body.done === true || body.done === 1 || body.done === "1";
+    sets.push("done = ?", "done_at = ?"); vals.push(done ? 1 : 0, done ? new Date().toISOString() : null);
+  }
+  // where it was dragged: x as a share of the board's width (so it survives other screen sizes), y in px, z = stacking
+  const num = (v: unknown, lo: number, hi: number) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  if (body?.x !== undefined) { if (body.x !== null && !num(body.x, 0, 1)) return json({ error: "x must be 0..1" }, 400); sets.push("x = ?"); vals.push(body.x); }
+  if (body?.y !== undefined) { if (body.y !== null && !num(body.y, 0, 20000)) return json({ error: "y must be 0..20000" }, 400); sets.push("y = ?"); vals.push(body.y); }
+  if (body?.z !== undefined) { if (!Number.isInteger(body.z) || body.z < 0 || body.z > 1e6) return json({ error: "z must be a whole number" }, 400); sets.push("z = ?"); vals.push(body.z); }
   if (body?.text != null) {
     const text = String(body.text).replace(/\s+/g, " ").trim().slice(0, 80);
     if (!text) return json({ error: "a goal needs words" }, 400);
@@ -63,7 +75,7 @@ export async function deleteGoal(env: ExtraEnv, id: number) {
 
 // ---------------- pins ----------------
 export async function listPins(env: ExtraEnv) {
-  const { results } = await env.DB.prepare(`SELECT * FROM pins ORDER BY COALESCE(position, 1000000), created_at DESC LIMIT ${MAX_PINS}`).all();
+  const { results } = await env.DB.prepare(`SELECT * FROM pins ORDER BY position IS NULL, position DESC, created_at DESC LIMIT ${MAX_PINS}`).all();
   return json({ pins: results });
 }
 
@@ -130,6 +142,14 @@ export async function editPin(env: ExtraEnv, id: number, body: any) {
   if (typeof c.v.image_url === "string" && isHttps(c.v.image_url)) c.v.image_url = await copyImage(env, c.v.image_url);
   const row = await env.DB.prepare(`UPDATE pins SET ${cols.map((k) => `${k} = ?`).join(", ")} WHERE id = ? RETURNING *`).bind(...cols.map((k) => c.v[k]), id).first();
   return row ? json(row) : json({ error: "not found" }, 404);
+}
+
+/** The wall's order, top-left first: ids in the order you arranged them. */
+export async function orderPins(env: ExtraEnv, body: any) {
+  const ids: unknown[] = Array.isArray(body?.ids) ? body.ids : [];
+  if (!ids.length || ids.length > 200 || !ids.every((i) => Number.isInteger(i)) || new Set(ids).size !== ids.length) return json({ error: "ids must be a list of pin ids" }, 400);
+  await env.DB.batch(ids.map((id, i) => env.DB.prepare(`UPDATE pins SET position = ? WHERE id = ?`).bind(ids.length - i, id)));
+  return json({ ok: true });
 }
 
 export async function deletePin(env: ExtraEnv, id: number) {

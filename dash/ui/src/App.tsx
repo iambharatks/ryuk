@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { ShinigamiEyes } from "./components/ShinigamiEyes";
-import { Data, NewPin, Pin, apiAddPin, apiDeletePin, apiRow, demoData, fetchData } from "./data";
+import { Data, NewPin, Pin, apiAddPin, apiDeletePin, apiOrderPins, apiRow, demoData, fetchData } from "./data";
 import { DeathPage } from "./components/DeathPage";
 import { Shelf } from "./components/Shelf";
 import { apiStore, demoStore, type Store } from "./store";
@@ -66,12 +66,17 @@ export default function App() {
     const pin: Pin = DEMO
       ? { id: Date.now(), created_at: new Date().toISOString(), kind: p.image_url ? "media" : "inspiration", title: p.title, note: p.quote ?? null, image_url: p.image_url ?? null, link: p.link ?? null, position: null }
       : await apiAddPin(p);
-    setData((d) => d && { ...d, pins: [...d.pins, pin] });
+    setData((d) => d && { ...d, pins: [pin, ...d.pins] });
     flash("Pinned to the wall");
   };
   const onDeletePin = async (id: number) => {
     if (!DEMO) { try { await apiDeletePin(id); } catch (e) { return flash("Not unpinned: " + (e as Error).message); } }
     setData((d) => d && { ...d, pins: d.pins.filter((p) => p.id !== id) });
+  };
+  const onOrderPins = async (ids: number[]) => {
+    const prev = data?.pins ?? [];
+    setData((d) => d && { ...d, pins: [...ids.map((i) => d.pins.find((p) => p.id === i)!).filter(Boolean), ...d.pins.filter((p) => !ids.includes(p.id))] });
+    if (!DEMO) { try { await apiOrderPins(ids); } catch (e) { setData((d) => d && { ...d, pins: prev }); flash("Not moved: " + (e as Error).message); } }
   };
   const onEdit = async (table: string, id: number, field: string, value: string) => {
     if (!DEMO) { try { await apiRow("PATCH", { table, id, field, value }); } catch (e) { flash("Not saved: " + (e as Error).message); throw e; } }
@@ -166,7 +171,7 @@ export default function App() {
         )}
         {!data && state === "loading" && view !== "Page" && view !== "Shelf" && view !== "Money" && <div className="grid gap-5 md:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-[420px] animate-pulse" />)}</div>}
         <div key={view} className="view-fade">
-        {data && view === "Gaze" && <Overview data={data} store={store} onAddPin={onAddPin} onDeletePin={onDeletePin} opening={opening} onOpenNotebook={openNotebook} notebookStats={notebookStats} demo={DEMO} />}
+        {data && view === "Gaze" && <Overview data={data} store={store} onAddPin={onAddPin} onDeletePin={onDeletePin} onOrderPins={onOrderPins} opening={opening} onOpenNotebook={openNotebook} notebookStats={notebookStats} demo={DEMO} />}
         {view === "Page" && <DeathPage store={store} write={write} onChanged={() => { if (!DEMO) load(); }} onApple={() => setApple((n) => n + 1)} />}
         {view === "Shelf" && <Shelf store={store} onChanged={() => { if (!DEMO) load(); }} />}
         {view === "Money" && <Coin store={coin} />}

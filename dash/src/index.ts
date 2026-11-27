@@ -4,7 +4,7 @@
  * so the data stays private even if Access is ever switched off by mistake.
  */
 import PAGE from "./page.html";
-import { addGoal, addPin, deleteGoal, deletePin, editGoal, editPin, listGoals, listPins } from "./workspace";
+import { addGoal, addPin, deleteGoal, deletePin, orderPins, editGoal, editPin, listGoals, listPins } from "./workspace";
 import { type BotRPC, addLibrary, addTask, deleteLibrary, deleteTask, editEntry, editLibrary, editTask, getPage, libraryProgress, serveFile, upload } from "./extra";
 import { addRule, addTxn, coinData, deleteRule, deleteTxn, editTxn, exportTxns, reclassify, setBudget } from "./coin";
 
@@ -119,7 +119,7 @@ async function getData(env: Env, days: number) {
     t === "messages"
       ? env.DB.prepare(`SELECT id, received_at, text, status, model FROM messages WHERE received_at >= ? ORDER BY received_at DESC LIMIT 2000`).bind(since)
       : t === "pins"
-        ? env.DB.prepare(`SELECT * FROM pins ORDER BY created_at DESC LIMIT 200`)
+        ? env.DB.prepare(`SELECT * FROM pins ORDER BY position IS NULL, position DESC, created_at DESC LIMIT 200`)
       : t === "finance_log"
         ? env.DB.prepare(`SELECT ${FINANCE_COLS} FROM finance_log WHERE date >= ? ORDER BY date DESC, time DESC LIMIT 5000`).bind(istDate(since))
       : t === "health_log"
@@ -235,6 +235,7 @@ export default {
     if (url.pathname === "/api/row" && req.method === "DELETE") return deleteRow(env, await req.json());
     if (url.pathname === "/api/pins" && req.method === "GET") return listPins(env);
     if (url.pathname === "/api/pins" && req.method === "POST") return addPin(env, await req.json());
+    if (url.pathname === "/api/pins/order" && req.method === "PUT") return orderPins(env, await req.json());
     if (url.pathname === "/api/goals" && req.method === "GET") return listGoals(env, url.searchParams.get("date"));
     if (url.pathname === "/api/goals" && req.method === "POST") return addGoal(env, await req.json());
     const item = url.pathname.match(/^\/api\/(goals|pins)\/(\d{1,12})$/);

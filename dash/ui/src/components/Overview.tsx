@@ -11,11 +11,12 @@ import { DayCounterStrip, GoalsBoard, NotebookDeck, ObservationsCard, PinWall, V
  *   the pin wall (posters)
  *   the Watcher's observations
  */
-export function Overview({ data, store, onAddPin, onDeletePin, opening, onOpenNotebook, notebookStats, demo }: {
+export function Overview({ data, store, onAddPin, onDeletePin, onOrderPins, opening, onOpenNotebook, notebookStats, demo }: {
   data: Data;
   store: Store;
   onAddPin: (p: NewPin) => Promise<void>;
   onDeletePin: (id: number) => Promise<void>;
+  onOrderPins: (ids: number[]) => Promise<void>;
   opening: boolean;
   onOpenNotebook: () => void;
   notebookStats: { pages: number; apples: number };
@@ -31,7 +32,7 @@ export function Overview({ data, store, onAddPin, onDeletePin, opening, onOpenNo
         deck={<NotebookDeck pages={notebookStats.pages} apples={notebookStats.apples} lines={todayLines} opening={opening} onOpen={onOpenNotebook} />} />
       <VitalsStrip data={data} />
       <GoalsBoard store={store} />
-      <PinWall pins={data.pins} onAdd={onAddPin} onDelete={onDeletePin} demo={demo}
+      <PinWall pins={data.pins} onAdd={onAddPin} onDelete={onDeletePin} onOrder={onOrderPins} demo={demo}
         upload={store.uploads ? (f) => store.upload(f).then((u) => u.url) : undefined} />
       <ObservationsCard data={data} />
     </>

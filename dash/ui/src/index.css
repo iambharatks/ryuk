@@ -584,6 +584,35 @@ tr.erasing td { text-decoration: line-through; text-decoration-color: #C84B31; t
 .sticky-pop { animation: stickyPop .2s ease-out backwards; }
 @keyframes stickyPop { from { opacity: 0; transform: rotate(var(--tilt, 0deg)) scale(.8); } }
 .sticky-leave { animation: stickyLeave .15s ease-in forwards; pointer-events: none; }
+/* free board: notes sit where you dropped them; they may overlap */
+.goals-field { position: relative; min-height: 112px; transition: height .2s ease; }
+.sticky-note.is-placed { position: absolute; cursor: grab; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.sticky-note.is-placed .sticky-text { cursor: inherit; }
+.sticky-note.is-dragging { cursor: grabbing; transition: none; transform: rotate(calc(var(--tilt, 0deg) + 2.5deg)) scale(1.06);
+  box-shadow: 0 2px 2px rgba(0,0,0,.25), 0 26px 30px -12px rgba(0,0,0,.85), inset 0 -18px 24px -20px rgba(0,0,0,.18); }
+.sticky-since { position: absolute; left: 8px; bottom: 5px; font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: .06em; color: rgba(26,26,46,.45); pointer-events: none; }
+/* tear-off: always visible (quietly), not only on hover */
+.sticky-tear-btn {
+  position: absolute; top: 1px; right: 1px; display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 999px; color: rgba(26,26,46,.42); transition: color .15s, background .15s;
+}
+@media (hover: hover) { .sticky-tear-btn { width: 26px; height: 26px; } .sticky-note:hover .sticky-tear-btn { color: rgba(26,26,46,.75); } }
+.sticky-tear-btn:hover, .sticky-tear-btn:focus-visible { color: #8a1c12; background: rgba(0,0,0,.07); }
+/* ripped off the pin: a jagged top edge, a twist, and it drops away */
+.sticky-tear { animation: stickyTear .48s cubic-bezier(.4,0,.8,.6) forwards; pointer-events: none;
+  clip-path: polygon(0 7%, 7% 2%, 13% 8%, 20% 3%, 27% 9%, 34% 2%, 41% 7%, 48% 1%, 55% 8%, 62% 3%, 69% 9%, 76% 2%, 83% 7%, 90% 2%, 100% 6%, 100% 100%, 0 100%); }
+.sticky-tear .sticky-pin { display: none; }
+@keyframes stickyTear {
+  0%   { transform: rotate(var(--tilt, 0deg)); }
+  22%  { transform: rotate(calc(var(--tilt, 0deg) + 7deg)) translate(2px, 4px); }
+  100% { transform: rotate(calc(var(--tilt, 0deg) + 26deg)) translate(22px, 90px); opacity: 0; }
+}
+/* the scrap left under the pin, which fades after a moment */
+.sticky-scrap { position: absolute; width: 30px; height: 11px; z-index: 10001; pointer-events: none;
+  clip-path: polygon(0 0, 100% 0, 100% 55%, 88% 100%, 76% 50%, 62% 95%, 50% 45%, 36% 100%, 24% 50%, 12% 95%, 0 55%);
+  animation: scrapFade 1.6s ease-in forwards; }
+.sticky-scrap .sticky-pin { top: -1px; }
+@keyframes scrapFade { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes stickyLeave { to { opacity: 0; transform: rotate(var(--tilt, 0deg)) scale(.8); } }
 
 /* the pin wall: a masonry of posters, each image at its own shape; PinWall deals pins into .pin-col columns */
@@ -635,11 +664,17 @@ tr.erasing td { text-decoration: line-through; text-decoration-color: #C84B31; t
 .poster-tack { animation: posterTack .45s cubic-bezier(.3,1.4,.5,1) backwards; }
 @keyframes posterTack { 0% { opacity: 0; transform: rotate(var(--tilt, 0deg)) translateY(-22px) scale(1.04); } 60% { opacity: 1; transform: rotate(var(--tilt, 0deg)) translateY(3px); } }
 .poster-leave { animation: posterLeave .26s ease-in forwards; pointer-events: none; }
+/* moving a pin: it lifts off as a ghost under your finger; its old spot shows where it will land */
+.poster { cursor: grab; touch-action: manipulation; -webkit-user-drag: none; }
+.poster-placeholder { opacity: .18; outline: 1.5px dashed rgba(236,229,211,.5); outline-offset: 4px; }
+.poster-ghost { position: fixed; z-index: 70; margin: 0; pointer-events: none; cursor: grabbing;
+  transform: rotate(calc(var(--tilt, 0deg) + 2deg)) scale(1.04); box-shadow: 0 30px 50px -18px rgba(0,0,0,.95); }
 @keyframes posterLeave { to { opacity: 0; transform: rotate(calc(var(--tilt, 0deg) * -2)) translateY(-26px) scale(1.03); } }
 
 @media (prefers-reduced-motion: reduce) {
   .sticky-note, .poster { transition: none !important; }
-  .sticky-pop, .sticky-leave, .poster-tack, .poster-leave, .vital-pop, .sticky-strike path { animation: none !important; }
+  .sticky-pop, .sticky-leave, .poster-tack, .poster-leave, .vital-pop, .sticky-strike path, .sticky-scrap { animation: none !important; }
+  .sticky-tear { animation: none !important; opacity: 0; }
   .sticky-strike path { stroke-dashoffset: 0; }
   .sticky-leave, .poster-leave { opacity: 0; }
 }

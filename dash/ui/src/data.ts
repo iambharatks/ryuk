@@ -92,6 +92,10 @@ export async function apiAddPin(pin: NewPin): Promise<Pin> {
   if (!res.ok) throw new Error(b.error || `HTTP ${res.status}`);
   return b;
 }
+export async function apiOrderPins(ids: number[]): Promise<void> {
+  const res = await fetch("/api/pins/order", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }) });
+  if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+}
 export async function apiDeletePin(id: number): Promise<void> {
   const res = await fetch(`/api/pins/${id}`, { method: "DELETE" });
   if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }

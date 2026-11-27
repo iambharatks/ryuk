@@ -186,7 +186,11 @@ CREATE TABLE IF NOT EXISTS daily_goals (
   color       TEXT,                          -- sticky-note colour
   rotation    REAL,                          -- -3..3 degrees, fixed when the note is written
   position    INTEGER,                       -- order on the board
-  created_at  TEXT DEFAULT (datetime('now'))
+  created_at  TEXT DEFAULT (datetime('now')),
+  done_at     TEXT,                          -- when kept (UTC ISO); open notes carry forward, kept ones leave after that IST day
+  x           REAL,                          -- 0..1 across the board; NULL = auto-placed
+  y           REAL,                          -- px down the board
+  z           INTEGER                        -- stacking order
 );
 CREATE INDEX IF NOT EXISTS idx_daily_goals_date ON daily_goals(date);
 

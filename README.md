@@ -69,7 +69,42 @@ Then it gives it back: streaks, a day page you can edit, a money ledger that sep
 
 ## Architecture
 
-<p align="center"><img src="docs/architecture.svg" alt="How Ryuk works: phone inputs flow into two Cloudflare Workers sharing D1 and R2; only free text reaches the LLM; sign-in is Face ID only" width="100%"></p>
+```mermaid
+flowchart LR
+  subgraph phone["iPhone"]
+    direction TB
+    TG("Telegram<br/>sets · meals · notes")
+    SMS("Bank SMS<br/>Shortcut")
+    HK("Apple Health<br/>Shortcut")
+    QL("Quick log<br/>Shortcut")
+    APP("Ryuk app<br/>Face ID")
+  end
+  WEB("Browser<br/>Face ID")
+
+  subgraph cf["Cloudflare · free tier"]
+    direction TB
+    BOT["<b>ryuk</b> · bot Worker<br/>webhook · ingest · parsers · cron"]
+    DASH["<b>ryuk-dash</b> · dashboard Worker<br/>sign-in · REST API · UI"]
+    D1[("D1<br/>SQLite")]
+    R2[("R2<br/>files")]
+  end
+  LLM{{"Gemini Flash-Lite<br/>JSON-schema output"}}
+
+  TG -- "webhook + secret token" --> BOT
+  SMS -- "INGEST_KEY · regex only" --> BOT
+  HK -- "HEALTH_KEY · plain code" --> BOT
+  QL -- "LOG_KEY" --> BOT
+  BOT -. "free text only" .-> LLM
+  BOT --> D1
+  DASH -- "Service Binding RPC" --> BOT
+  APP -- "Secure Enclave signature" --> DASH
+  WEB -- "passkey · WebAuthn" --> DASH
+  DASH --> D1
+  DASH --> R2
+
+  classDef ext stroke-dasharray: 4 3
+  class LLM ext
+```
 
 Two Workers share one D1 database. The bot owns ingestion (Telegram, Shortcuts, a nightly summary); the dashboard owns sign-in, the API
 and a single inlined HTML page (React, built to one file). The dashboard asks the bot to parse text through a Service Binding, so the LLM
